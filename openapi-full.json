@@ -300,6 +300,7 @@
                             "call",
                             "chat",
                             "conversations",
+                            "threads",
                             "federation",
                             "previews",
                             "signaling",
@@ -588,6 +589,20 @@
                                             "private-first"
                                         ],
                                         "description": "User selected grouping mode for conversations (see [constants list](https://nextcloud-talk.readthedocs.io/en/latest/constants#conversations-group-mode))"
+                                    }
+                                }
+                            },
+                            "threads": {
+                                "type": "object",
+                                "required": [
+                                    "lock-reason-length"
+                                ],
+                                "properties": {
+                                    "lock-reason-length": {
+                                        "type": "integer",
+                                        "format": "int64",
+                                        "description": "Maximum length of a Thread's lock reason",
+                                        "minimum": 1
                                     }
                                 }
                             },
@@ -2691,7 +2706,9 @@
                     "title",
                     "lastMessageId",
                     "lastActivity",
-                    "numReplies"
+                    "numReplies",
+                    "state",
+                    "lockReason"
                 ],
                 "properties": {
                     "id": {
@@ -2725,6 +2742,21 @@
                         "format": "int64",
                         "description": "Number of replies in the thread",
                         "minimum": 0
+                    },
+                    "state": {
+                        "type": "integer",
+                        "format": "int64",
+                        "enum": [
+                            0,
+                            1,
+                            2
+                        ],
+                        "description": "State of the thread (`0` Ongoing, `1` Closed, `2` Locked)"
+                    },
+                    "lockReason": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "Optional reason given when the thread was last locked, null when none was given or the thread was never locked"
                     }
                 }
             },
@@ -2752,6 +2784,7 @@
                 "required": [
                     "thread",
                     "attendee",
+                    "canManage",
                     "first",
                     "last"
                 ],
@@ -2763,6 +2796,10 @@
                     "attendee": {
                         "$ref": "#/components/schemas/ThreadAttendee",
                         "description": "Attendee details for the current user in this thread"
+                    },
+                    "canManage": {
+                        "type": "boolean",
+                        "description": "Whether the current actor may manage this thread (change its state, feature it, or edit its tags)"
                     },
                     "first": {
                         "nullable": true,
@@ -8648,7 +8685,8 @@
                                                             "enum": [
                                                                 "message",
                                                                 "reply-to",
-                                                                "send-at"
+                                                                "send-at",
+                                                                "locked"
                                                             ]
                                                         }
                                                     }
@@ -11741,7 +11779,8 @@
                                                             "enum": [
                                                                 "message",
                                                                 "until",
-                                                                "status"
+                                                                "status",
+                                                                "locked"
                                                             ]
                                                         }
                                                     }
@@ -11784,7 +11823,8 @@
                                                             "enum": [
                                                                 "message",
                                                                 "until",
-                                                                "status"
+                                                                "status",
+                                                                "locked"
                                                             ]
                                                         }
                                                     }
@@ -11938,7 +11978,8 @@
                                                         "error": {
                                                             "type": "string",
                                                             "enum": [
-                                                                "status"
+                                                                "status",
+                                                                "locked"
                                                             ]
                                                         }
                                                     }
@@ -15932,7 +15973,8 @@
                                                                 "options",
                                                                 "poll",
                                                                 "question",
-                                                                "room"
+                                                                "room",
+                                                                "locked"
                                                             ]
                                                         }
                                                     }
@@ -28522,6 +28564,251 @@
                                                             "type": "string",
                                                             "enum": [
                                                                 "title"
+                                                            ]
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Not allowed, either not the original author or not a moderator",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "ocs"
+                                    ],
+                                    "properties": {
+                                        "ocs": {
+                                            "type": "object",
+                                            "required": [
+                                                "meta",
+                                                "data"
+                                            ],
+                                            "properties": {
+                                                "meta": {
+                                                    "$ref": "#/components/schemas/OCSMeta"
+                                                },
+                                                "data": {
+                                                    "type": "object",
+                                                    "required": [
+                                                        "error"
+                                                    ],
+                                                    "properties": {
+                                                        "error": {
+                                                            "type": "string",
+                                                            "enum": [
+                                                                "permission"
+                                                            ]
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Thread not found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "ocs"
+                                    ],
+                                    "properties": {
+                                        "ocs": {
+                                            "type": "object",
+                                            "required": [
+                                                "meta",
+                                                "data"
+                                            ],
+                                            "properties": {
+                                                "meta": {
+                                                    "$ref": "#/components/schemas/OCSMeta"
+                                                },
+                                                "data": {
+                                                    "type": "object",
+                                                    "required": [
+                                                        "error"
+                                                    ],
+                                                    "properties": {
+                                                        "error": {
+                                                            "type": "string",
+                                                            "enum": [
+                                                                "thread"
+                                                            ]
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/ocs/v2.php/apps/spreed/api/{apiVersion}/chat/{token}/threads/{threadId}/state": {
+            "put": {
+                "operationId": "thread-set-state",
+                "summary": "Change the lifecycle state of a thread",
+                "description": "One endpoint serves all four transitions - close, lock, reopen from Closed, reopen from Locked (AD-12) - the target state and the Thread's current state together determine which transition, and therefore which system message verb, applies.\nRequired capability: `thread-management`",
+                "tags": [
+                    "thread"
+                ],
+                "security": [
+                    {},
+                    {
+                        "bearer_auth": []
+                    },
+                    {
+                        "basic_auth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": [
+                                    "state"
+                                ],
+                                "properties": {
+                                    "state": {
+                                        "type": "integer",
+                                        "format": "int64",
+                                        "description": "New state"
+                                    },
+                                    "reason": {
+                                        "type": "string",
+                                        "nullable": true,
+                                        "default": null,
+                                        "description": "Optional reason, only meaningful (and only validated) when locking; ignored for every other target state (max. 4000 characters, see `config => threads => lock-reason-length`)"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "apiVersion",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "v1"
+                            ],
+                            "default": "v1"
+                        }
+                    },
+                    {
+                        "name": "token",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9]{4,30}$"
+                        }
+                    },
+                    {
+                        "name": "threadId",
+                        "in": "path",
+                        "description": "The thread ID to change the state for",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 0
+                        }
+                    },
+                    {
+                        "name": "OCS-APIRequest",
+                        "in": "header",
+                        "description": "Required to be true for the API request to pass",
+                        "required": true,
+                        "schema": {
+                            "type": "boolean",
+                            "default": true
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Thread state changed successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "ocs"
+                                    ],
+                                    "properties": {
+                                        "ocs": {
+                                            "type": "object",
+                                            "required": [
+                                                "meta",
+                                                "data"
+                                            ],
+                                            "properties": {
+                                                "meta": {
+                                                    "$ref": "#/components/schemas/OCSMeta"
+                                                },
+                                                "data": {
+                                                    "$ref": "#/components/schemas/ThreadInfo"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "The provided state or reason was invalid",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "ocs"
+                                    ],
+                                    "properties": {
+                                        "ocs": {
+                                            "type": "object",
+                                            "required": [
+                                                "meta",
+                                                "data"
+                                            ],
+                                            "properties": {
+                                                "meta": {
+                                                    "$ref": "#/components/schemas/OCSMeta"
+                                                },
+                                                "data": {
+                                                    "type": "object",
+                                                    "required": [
+                                                        "error"
+                                                    ],
+                                                    "properties": {
+                                                        "error": {
+                                                            "type": "string",
+                                                            "enum": [
+                                                                "value",
+                                                                "reason"
                                                             ]
                                                         }
                                                     }

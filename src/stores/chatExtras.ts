@@ -22,6 +22,7 @@ import { useStore } from 'vuex'
 import ConfirmDialog from '../components/UIShared/ConfirmDialog.vue'
 import { PARTICIPANT } from '../constants.ts'
 import BrowserStorage from '../services/BrowserStorage.js'
+import { getTalkConfig } from '../services/CapabilitiesManager.ts'
 import { EventBus } from '../services/EventBus.ts'
 import {
 	deleteScheduledMessage as deleteScheduledMessageApi,
@@ -33,6 +34,7 @@ import {
 	renameThread as renameThreadApi,
 	scheduleMessage as scheduleMessageApi,
 	setThreadNotificationLevel as setThreadNotificationLevelApi,
+	setThreadState as setThreadStateApi,
 	summarizeChat,
 } from '../services/messagesService.ts'
 import { parseMentions, parseSpecialSymbols } from '../utils/textParse.ts'
@@ -92,6 +94,20 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 		if (threads.value[token]?.[threadId]) {
 			return threads.value[token][threadId]
 		}
+	}
+
+	/**
+	 * Returns whether the current actor may manage (change state, feature,
+	 * tag) a given thread - Story 1.3 AC6's single computed-getter seam.
+	 * Every control that needs this answer reads it from here rather than
+	 * re-deriving its own permission check from Vuex moderator state or
+	 * actor comparisons.
+	 *
+	 * @param token - conversation token
+	 * @param threadId - thread id
+	 */
+	function canManageThread(token: string, threadId: number): boolean {
+		return threads.value[token]?.[threadId]?.canManage ?? false
 	}
 
 	/**
@@ -352,6 +368,7 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 			threads.value[token][threadId] = {
 				thread: payload.thread ?? threads.value[token][threadId].thread,
 				attendee: payload.attendee ?? threads.value[token][threadId].attendee,
+				canManage: payload.canManage ?? threads.value[token][threadId].canManage,
 				first: payload.first ?? threads.value[token][threadId].first,
 				last: payload.last ?? threads.value[token][threadId].last,
 			}
@@ -411,6 +428,66 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 				console.error(e)
 			}
 		}
+	}
+
+	/**
+	 * Story 1.4, AC1-AC4, AC14: change a thread's lifecycle state on the
+	 * server and adopt the response - never the request - into the store
+	 * (AD-13, last write wins).
+	 *
+	 * @param token - conversation token
+	 * @param threadId - thread id to update
+	 * @param state - new state (see THREAD.STATE)
+	 * @param reason - optional reason, only meaningful when locking
+	 */
+	async function changeThreadState(token: string, threadId: number, state: number, reason?: string) {
+		try {
+			const response = await setThreadStateApi(token, threadId, state, reason)
+			addThread(token, response.data.ocs.data)
+		} catch (e) {
+			showError(t('spreed', 'Failed to change the thread state'))
+			console.error(e)
+		}
+	}
+
+	/**
+	 * Story 1.4, AC10, AC11: prompt for an optional lock reason before
+	 * locking a thread, always returning the entered (possibly empty)
+	 * string. The length bound is the one server-side constant published
+	 * via capabilities (AD-9 Consistency Convention), stated in the
+	 * field's label rather than restated as a client literal.
+	 *
+	 * Note: mirrors renameThread()'s ConfirmDialog shape above. For an
+	 * `isForm` dialog, ConfirmDialog.vue resolves with the current input
+	 * value regardless of which button closes it - there is no distinct
+	 * "cancelled" outcome, exactly as renameThread()'s "Dismiss" button
+	 * already behaves today. Closing with an empty field is exactly
+	 * AC11's "no reason" case, not an error.
+	 */
+	async function promptLockThreadReason(): Promise<string> {
+		const lockReasonMaxLength = getTalkConfig('local', 'threads', 'lock-reason-length') || 4000
+
+		const reason = await spawnDialog(ConfirmDialog, {
+			name: t('spreed', 'Lock thread'),
+			isForm: true,
+			inputProps: {
+				value: '',
+				label: t('spreed', 'Reason (optional, up to {max} characters)', { max: lockReasonMaxLength }),
+			},
+			buttons: [
+				{
+					label: t('spreed', 'Dismiss'),
+					callback: () => undefined,
+				},
+				{
+					label: t('spreed', 'Lock'),
+					variant: 'primary',
+					callback: () => true,
+				},
+			],
+		})
+
+		return typeof reason === 'string' ? reason : ''
 	}
 
 	/**
@@ -856,6 +933,7 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 		followedThreadsList,
 
 		getThread,
+		canManageThread,
 		getThreadsList,
 		getThreadTitle,
 		getParentIdToReply,
@@ -875,6 +953,8 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 		updateThread,
 		updateThreadTitle,
 		renameThread,
+		changeThreadState,
+		promptLockThreadReason,
 		clearThreads,
 		removeMessageFromThread,
 		getChatInput,

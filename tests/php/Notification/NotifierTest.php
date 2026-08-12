@@ -773,11 +773,41 @@ class NotifierTest extends TestCase {
 				],
 				$deletedUser = false, $guestName = '', $isPushNotification = true,
 			],
+
+			// Story 1.9, AC1/AC5: the message-specific link carries the thread id
+			// whenever the message belongs to a Thread, and this holds unconditionally -
+			// including for push notifications, since the link is set outside the
+			// `isPreparingPushNotification()` guard (`Notifier::parseChatMessage()`).
+			'push notification includes threadId outside the push guard' => [
+				$subject = 'chat', Room::TYPE_GROUP,      ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user in Room name' . "\n" . 'Hi @Administrator',
+				[
+					'{user} in {call}' . "\n" . '{message}',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'message' => ['type' => 'highlight', 'id' => '123456789', 'name' => 'Hi @Administrator'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = true, $threadId = 55,
+			],
+			'in-app notification includes threadId' => [
+				$subject = 'mention', Room::TYPE_GROUP,      ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user mentioned you in conversation Room name',
+				[
+					'{user} mentioned you in conversation {call}',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77,
+			],
 		];
 	}
 
 	#[DataProvider('dataPrepareChatMessage')]
-	public function testPrepareChatMessage(string $subject, int $roomType, array $subjectParameters, ?string $displayName, string $roomName, string $parsedSubject, array $richSubject, bool $deletedUser = false, ?string $guestName = null, bool $isPushNotification = false): void {
+	public function testPrepareChatMessage(string $subject, int $roomType, array $subjectParameters, ?string $displayName, string $roomName, string $parsedSubject, array $richSubject, bool $deletedUser = false, ?string $guestName = null, bool $isPushNotification = false, ?int $threadId = null): void {
 		/** @var INotification&MockObject $notification */
 		$notification = $this->createMock(INotification::class);
 		$l = $this->createMock(IL10N::class);
@@ -787,6 +817,21 @@ class NotifierTest extends TestCase {
 
 		$this->notificationManager->method('isPreparingPushNotification')
 			->willReturn($isPushNotification);
+
+		// Story 1.9, AC1/AC2/AC5: capture every `linkToRouteAbsolute()` call so the
+		// message-specific link (identified below by its `_fragment` key) can be
+		// asserted to carry `threadId` when the message belongs to a Thread, and
+		// omit it otherwise - the query scheme the client's `useGetThreadId()`
+		// reads. `prepare()` also sets one generic link with no `_fragment`
+		// before `parseChatMessage()` overrides it, hence "exactly 2" below.
+		$capturedLinkParams = [];
+		$this->url->expects($this->exactly(2))
+			->method('linkToRouteAbsolute')
+			->willReturnCallback(function (string $routeName, array $parameters = []) use (&$capturedLinkParams) {
+				$this->assertSame('spreed.Page.showCall', $routeName);
+				$capturedLinkParams[] = $parameters;
+				return 'https://example.tld/index.php/call/' . ($parameters['token'] ?? '');
+			});
 
 		$room = $this->createMock(Room::class);
 		$room->expects($this->atLeastOnce())
@@ -972,9 +1017,28 @@ class NotifierTest extends TestCase {
 			->willReturn('roomToken');
 		$notification->expects($this->once())
 			->method('getMessageParameters')
-			->willReturn(['commentId' => '23']);
+			->willReturn($threadId !== null ? ['commentId' => '23', 'threadId' => $threadId] : ['commentId' => '23']);
 
 		$this->assertEquals($notification, $this->notifier->prepare($notification, 'de'));
+
+		// Story 1.9, AC1/AC2/AC5: the message-specific link (identified by its
+		// `_fragment` key, as opposed to `prepare()`'s generic `['token' => ...]`
+		// link) carries `threadId` when the message belongs to a Thread, and
+		// omits it otherwise.
+		$messageLinkParams = null;
+		foreach ($capturedLinkParams as $params) {
+			if (array_key_exists('_fragment', $params)) {
+				$messageLinkParams = $params;
+			}
+		}
+		$this->assertNotNull($messageLinkParams, 'Expected one linkToRouteAbsolute() call with a message fragment');
+		$this->assertSame('message_123456789', $messageLinkParams['_fragment']);
+		if ($threadId !== null) {
+			$this->assertArrayHasKey('threadId', $messageLinkParams);
+			$this->assertSame($threadId, $messageLinkParams['threadId']);
+		} else {
+			$this->assertArrayNotHasKey('threadId', $messageLinkParams);
+		}
 	}
 
 	public static function dataPrepareThrows(): array {

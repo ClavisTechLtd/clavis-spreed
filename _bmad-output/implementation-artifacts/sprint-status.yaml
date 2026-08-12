@@ -1,0 +1,92 @@
+# generated: 2026-08-09
+# last_updated: 2026-08-09
+# project: clavis-spreed
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: {project-root}/_bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+#   - in-progress -> done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; sprint-status surfaces open ones
+
+generated: 2026-08-09
+last_updated: 2026-08-09
+project: clavis-spreed
+project_key: NOKEY
+tracking_system: file-system
+story_location: "{project-root}/_bmad-output/implementation-artifacts"
+
+development_status:
+  # Epic 1: Thread Lifecycle and Management Authority
+  epic-1: in-progress
+  1-1-prepare-the-fork-history-row-key-convention-and-the-scale-fixture: review
+  1-2-every-thread-reports-a-thread-state: review
+  1-3-one-authority-rule-for-thread-management-on-the-server-and-in-the-client: review
+  1-4-a-thread-manager-moves-a-thread-between-states-with-an-optional-reason-on-locking: review
+  1-5-posting-into-a-closed-thread-returns-it-to-ongoing: review
+  1-6-a-locked-thread-refuses-posted-content-on-all-nine-paths: review
+  1-7-a-locked-thread-refuses-edits-deletes-pins-and-reactions: review
+  1-8-thread-state-is-visible-wherever-a-thread-appears: review
+  1-9-following-a-notification-lands-the-participant-in-the-thread: review
+  1-10-threads-orphaned-by-message-expiry-are-reaped: review
+  epic-1-retrospective: optional
+
+  # Epic 2: Thread Directory — Finding the Thread You Want
+  epic-2: backlog
+  2-1-feature-a-thread-and-featured-threads-sort-first: backlog
+  2-2-the-thread-list-pages-by-keyset-cursor-and-loads-incrementally: backlog
+  2-3-the-thread-list-filters-by-thread-state: backlog
+  2-4-the-thread-directory-becomes-a-first-class-peer-surface: backlog
+  2-5-thread-and-directory-addresses-and-the-remaining-entry-points: backlog
+  2-6-find-a-thread-by-title-in-both-list-surfaces: backlog
+  2-7-thread-tags-apply-remove-and-the-colour-bound-to-the-text: backlog
+  2-8-recolour-a-tag-and-filter-the-directory-by-tag: backlog
+  epic-2-retrospective: optional
+
+  # Epic 3: Per-Thread Unread State
+  epic-3: backlog
+  3-1-per-thread-read-markers-over-one-lazily-frozen-fallback-baseline: backlog
+  3-2-each-thread-reports-a-thread-unread-count: backlog
+  3-3-conversation-unread-splits-and-thread-unread-becomes-independent: backlog
+  3-4-mark-a-thread-read-and-mark-every-thread-read: backlog
+  3-5-the-conversation-reports-whether-it-has-unread-threads: backlog
+  3-6-unread-state-in-the-directory-and-the-followed-thread-list: backlog
+  epic-3-retrospective: optional
+
+  # Epic 4: Thread-Aware Notifications
+  epic-4: backlog
+  4-1-thread-notifications-name-the-thread: backlog
+  4-2-thread-lifecycle-changes-notify-a-thread-s-followers: backlog
+  4-3-push-payloads-carry-the-same-identifiers-as-in-app-notifications-and-fit: backlog
+  epic-4-retrospective: optional

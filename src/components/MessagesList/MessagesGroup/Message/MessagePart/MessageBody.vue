@@ -164,6 +164,9 @@
 
 		<!-- Actions and reactions slot -->
 		<div v-if="!isDeletedMessage" class="message-actions">
+			<!-- Story 1.8, AC3: state appears alongside the existing
+				thread title (above) and reply count (button below). -->
+			<ThreadStateBadge v-if="isThreadStarterMessage" :state="threadState" />
 			<NcButton
 				v-if="isThreadStarterMessage && message.threadId !== -1"
 				class="message-actions__thread"
@@ -199,13 +202,14 @@ import IconPin from 'vue-material-design-icons/PinOutline.vue'
 import IconReload from 'vue-material-design-icons/Reload.vue'
 import AvatarWrapper from '../../../../AvatarWrapper/AvatarWrapper.vue'
 import MessageQuote from '../../../../MessageQuote.vue'
+import ThreadStateBadge from '../../../../RightSidebar/Threads/ThreadStateBadge.vue'
 import CallButton from '../../../../TopBar/CallButton.vue'
 import ConversationActionsShortcut from '../../../../UIShared/ConversationActionsShortcut.vue'
 import PollCard from './PollCard.vue'
 import { useGetThreadId } from '../../../../../composables/useGetThreadId.ts'
 import { useIsInCall } from '../../../../../composables/useIsInCall.js'
 import { useMessageInfo } from '../../../../../composables/useMessageInfo.ts'
-import { CONVERSATION, MESSAGE } from '../../../../../constants.ts'
+import { CONVERSATION, MESSAGE, THREAD } from '../../../../../constants.ts'
 import { hasTalkFeature } from '../../../../../services/CapabilitiesManager.ts'
 import { EventBus } from '../../../../../services/EventBus.ts'
 import { useActorStore } from '../../../../../stores/actor.ts'
@@ -232,6 +236,7 @@ export default {
 		PollCard,
 		MessageQuote,
 		ConversationActionsShortcut,
+		ThreadStateBadge,
 		// Icons
 		IconAlertCircleOutline,
 		IconArrowLeftTop,
@@ -381,6 +386,14 @@ export default {
 			return numReplies
 				? n('spreed', '%n reply', '%n replies', numReplies)
 				: t('spreed', 'Reply')
+		},
+
+		// Story 1.8, AC3: unlike threadTitle/threadNumReplies, `state` has
+		// no per-message fallback field on ChatMessage - an unloaded
+		// Thread degrades to Ongoing (no badge), matching AC1's
+		// quiet-common-case principle rather than an error state.
+		threadState() {
+			return this.threadInfo?.thread.state ?? THREAD.STATE.ONGOING
 		},
 
 		conversation() {

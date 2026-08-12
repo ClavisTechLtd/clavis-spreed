@@ -15,9 +15,11 @@ use OCA\Talk\Events\ReactionRemovedEvent;
 use OCA\Talk\Exceptions\ReactionAlreadyExistsException;
 use OCA\Talk\Exceptions\ReactionNotSupportedException;
 use OCA\Talk\Exceptions\ReactionOutOfContextException;
+use OCA\Talk\Exceptions\ThreadProperty\LockedException;
 use OCA\Talk\Participant;
 use OCA\Talk\ResponseDefinitions;
 use OCA\Talk\Room;
+use OCA\Talk\Service\ThreadService;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\Comments\IComment;
 use OCP\Comments\NotFoundException;
@@ -38,6 +40,7 @@ class ReactionManager {
 		private readonly Notifier $notifier,
 		private readonly IEventDispatcher $dispatcher,
 		private readonly ITimeFactory $timeFactory,
+		private readonly ThreadService $threadService,
 	) {
 	}
 
@@ -48,9 +51,20 @@ class ReactionManager {
 	 * @throws ReactionAlreadyExistsException
 	 * @throws ReactionNotSupportedException
 	 * @throws ReactionOutOfContextException
+	 * @throws LockedException with {@see LockedException::REASON_LOCKED} when the Thread is Locked (Story 1.7, AC1, AC5).
 	 */
 	public function addReactionMessage(Room $chat, string $actorType, string $actorId, string $actorDisplayName, int $messageId, string $reaction): IComment {
 		$parentMessage = $this->getCommentToReact($chat, (string)$messageId);
+
+		// Story 1.7, AC1, AC5, AC7: the third enforcement seam - this
+		// method reaches commentsManager->save() directly (a new reaction
+		// comment), never through sendMessage()/addSystemMessage(), so it
+		// needs its own call to the single shared guard, evaluated before
+		// any write - but after getCommentToReact()'s own pre-existing
+		// structural validation of the target message.
+		$threadId = (int)$parentMessage->getTopmostParentId() ?: (int)$parentMessage->getId();
+		$this->threadService->ensureNotLocked($chat->getId(), $threadId);
+
 		try {
 			// Check if the user already reacted with the same reaction
 			$this->commentsManager->getReactionComment(
@@ -99,10 +113,17 @@ class ReactionManager {
 	 * @throws NotFoundException
 	 * @throws ReactionNotSupportedException
 	 * @throws ReactionOutOfContextException
+	 * @throws LockedException with {@see LockedException::REASON_LOCKED} when the Thread is Locked (Story 1.7, AC1, AC5).
 	 */
 	public function deleteReactionMessage(Room $chat, string $actorType, string $actorId, string $actorDisplayName, int $messageId, string $reaction): IComment {
 		// Just to verify that messageId is part of the room and throw error if not.
 		$parentComment = $this->getCommentToReact($chat, (string)$messageId);
+
+		// Story 1.7, AC1, AC5, AC7: the third enforcement seam - evaluated
+		// before the event dispatch and before the reaction comment's own
+		// commentsManager->save() below.
+		$threadId = (int)$parentComment->getTopmostParentId() ?: (int)$parentComment->getId();
+		$this->threadService->ensureNotLocked($chat->getId(), $threadId);
 
 		$event = new BeforeReactionRemovedEvent($chat, $parentComment, $actorType, $actorId, $actorDisplayName, $reaction);
 		$this->dispatcher->dispatchTyped($event);

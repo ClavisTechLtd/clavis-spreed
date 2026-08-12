@@ -20,6 +20,7 @@ use OCA\Talk\Events\SystemMessageSentEvent;
 use OCA\Talk\Exceptions\InvalidRoomException;
 use OCA\Talk\Exceptions\MessagingNotAllowedException;
 use OCA\Talk\Exceptions\ParticipantNotFoundException;
+use OCA\Talk\Exceptions\ThreadProperty\LockedException;
 use OCA\Talk\Model\Attachment;
 use OCA\Talk\Model\Attendee;
 use OCA\Talk\Model\Message;
@@ -34,6 +35,7 @@ use OCA\Talk\Service\PollService;
 use OCA\Talk\Service\RoomService;
 use OCA\Talk\Service\ThreadService;
 use OCA\Talk\Share\RoomShareProvider;
+use OCA\Talk\Signaling\Listener;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJobList;
@@ -188,6 +190,29 @@ class ChatManager {
 			$comment->setVerb(self::VERB_SYSTEM);
 		}
 
+		// Story 1.6, AC1, AC12: the single write-refusal guard for a
+		// Locked Thread (AD-2), evaluated once before commentsManager->save()
+		// below - never on the $threadId re-derived after the save (used
+		// further down only for cache invalidation and Story 1.5's
+		// reviveIfClosed()). $effectiveThreadId mirrors what
+		// $comment->getTopmostParentId() will resolve to post-save for
+		// this same comment, computed slightly earlier - it is the same
+		// value, not a second, independent resolution.
+		//
+		// Exemption: Story 1.4's lifecycle-transition and rename/create
+		// system messages (Listener::THREAD_MESSAGE_TYPES_WITH_CONTEXT)
+		// are management operations, not content, and must still record
+		// themselves - explicitly allow-listed by verb, never expressed
+		// as "system messages are exempt", which would also exempt the
+		// four content-carrying system-message paths this guard exists
+		// to cover (object_shared, file_shared).
+		$effectiveThreadId = $replyTo !== null
+			? ((int)$replyTo->getTopmostParentId() ?: (int)$replyTo->getId())
+			: $threadId;
+		if ($effectiveThreadId !== 0 && !in_array($messageType, Listener::THREAD_MESSAGE_TYPES_WITH_CONTEXT, true)) {
+			$this->threadService->ensureNotLocked($chat->getId(), $effectiveThreadId);
+		}
+
 		$metadata = [];
 		if ($silent) {
 			$metadata[Message::METADATA_SILENT] = true;
@@ -215,14 +240,30 @@ class ChatManager {
 
 				if ($threadId !== 0) {
 					$isThread = $this->threadService->updateLastMessageInfoAfterReply($threadId, (int)$comment->getId(), $chat->getId());
-					if ($isThread && $actorType === Attendee::ACTOR_USERS) {
-						try {
-							// Add to subscribed threads list
-							$participant = $this->participantService->getParticipant($chat, $actorId);
-							$this->threadService->ensureIsThreadAttendee($participant->getAttendee(), $threadId);
-						} catch (ParticipantNotFoundException) {
+					if ($isThread) {
+						// Posting into a Closed Thread revives it to
+						// Ongoing (Story 1.5, AD-2) - reusing this
+						// method's already resolved $threadId rather than
+						// a second lookup, and called before the
+						// SystemMessageSentEvent dispatch below so the
+						// relay observes the revived state. Story 1.4's
+						// state-change/rename system messages never reach
+						// here at all - they pass
+						// $shouldSkipLastMessageUpdate: true, so the
+						// Thread's state has either already been mutated
+						// by their own caller or is not content being
+						// posted in the FR-3 sense.
+						$this->threadService->reviveIfClosed($chat->getId(), $threadId);
+
+						if ($actorType === Attendee::ACTOR_USERS) {
+							try {
+								// Add to subscribed threads list
+								$participant = $this->participantService->getParticipant($chat, $actorId);
+								$this->threadService->ensureIsThreadAttendee($participant->getAttendee(), $threadId);
+							} catch (ParticipantNotFoundException) {
+							}
 						}
-					} elseif (!$isThread) {
+					} else {
 						$threadId = 0;
 					}
 				}
@@ -415,7 +456,25 @@ class ChatManager {
 			$threadId = (int)$replyTo->getTopmostParentId() ?: (int)$replyTo->getId();
 			$threadId = $this->threadService->validateThread($chat->getId(), $threadId) ? $threadId : Thread::THREAD_NONE;
 		} elseif ($threadId !== Thread::THREAD_NONE && $threadId !== Thread::THREAD_CREATE) {
-			$comment->setParentId((string)$threadId);
+			// Story 1.6, AC2: close the asymmetry with the reply branch
+			// above - this branch used to set the parent from a raw,
+			// unvalidated $threadId. Validating it here is also what
+			// makes the write-refusal guard below meaningful for this
+			// branch: without it, a Locked check would run against an id
+			// that might not even name a real Thread.
+			$threadId = $this->threadService->validateThread($chat->getId(), $threadId) ? $threadId : Thread::THREAD_NONE;
+			if ($threadId !== Thread::THREAD_NONE) {
+				$comment->setParentId((string)$threadId);
+			}
+		}
+
+		if ($threadId !== Thread::THREAD_NONE && $threadId !== Thread::THREAD_CREATE) {
+			// Story 1.6, AC1: the single write-refusal guard for a Locked
+			// Thread (AD-2) - evaluated once, on this method's single
+			// validated $threadId, before commentsManager->save() below.
+			// A refusal after the save would not be a refusal. THREAD_CREATE
+			// is excluded: a Thread that does not exist yet cannot be Locked.
+			$this->threadService->ensureNotLocked($chat->getId(), $threadId);
 		}
 
 		$referenceId = trim(substr($referenceId, 0, 64));
@@ -464,9 +523,19 @@ class ChatManager {
 				$isThread = $this->threadService->updateLastMessageInfoAfterReply($threadId, $messageId, $chat->getId());
 				if (!$isThread) {
 					$threadId = Thread::THREAD_NONE;
-				} elseif ($participant instanceof Participant) {
-					// Add to subscribed threads list
-					$this->threadService->ensureIsThreadAttendee($participant->getAttendee(), $threadId);
+				} else {
+					// Posting into a Closed Thread revives it to Ongoing
+					// (Story 1.5, AD-2) - reusing this method's already
+					// resolved $threadId rather than a second lookup, and
+					// called before the ChatMessageSentEvent dispatch below
+					// so the relay (lib/Signaling/Listener.php) observes
+					// the revived state.
+					$this->threadService->reviveIfClosed($chat->getId(), $threadId);
+
+					if ($participant instanceof Participant) {
+						// Add to subscribed threads list
+						$this->threadService->ensureIsThreadAttendee($participant->getAttendee(), $threadId);
+					}
 				}
 			}
 
@@ -622,8 +691,16 @@ class ChatManager {
 	 * @param \DateTime $deletionTime
 	 * @return IComment
 	 * @throws ShareNotFound
+	 * @throws LockedException with {@see LockedException::REASON_LOCKED} when the Thread is Locked (Story 1.7, AC1, AC3).
 	 */
 	public function deleteMessage(Room $chat, IComment $comment, Participant $participant, \DateTime $deletionTime): IComment {
+		// Story 1.7, AC1, AC3, AC7: the third enforcement seam - this
+		// method reaches commentsManager->save() directly, never through
+		// sendMessage()/addSystemMessage(), so it needs its own call to
+		// the single shared guard, evaluated first, before any write.
+		$threadId = (int)$comment->getTopmostParentId() ?: (int)$comment->getId();
+		$this->threadService->ensureNotLocked($chat->getId(), $threadId);
+
 		if ($comment->getVerb() === self::VERB_OBJECT_SHARED) {
 			$messageData = json_decode($comment->getMessage(), true);
 			$this->unshareFileOnMessageDelete($chat, $participant, $messageData);
@@ -689,8 +766,15 @@ class ChatManager {
 	 * @return IComment
 	 * @throws MessageTooLongException
 	 * @throws \InvalidArgumentException When the message is empty or the shared object is not a file share with caption
+	 * @throws LockedException with {@see LockedException::REASON_LOCKED} when the Thread is Locked (Story 1.7, AC1, AC2).
 	 */
 	public function editMessage(Room $chat, IComment $comment, Participant $participant, \DateTime $editTime, string $message): IComment {
+		// Story 1.7, AC1, AC2, AC7: the third enforcement seam - evaluated
+		// first, before any other validation or write, exactly like
+		// deleteMessage() above.
+		$threadId = (int)$comment->getTopmostParentId() ?: (int)$comment->getId();
+		$this->threadService->ensureNotLocked($chat->getId(), $threadId);
+
 		if (trim($message) === '') {
 			throw new \InvalidArgumentException('message');
 		}
@@ -770,7 +854,16 @@ class ChatManager {
 		);
 	}
 
+	/**
+	 * @throws LockedException with {@see LockedException::REASON_LOCKED} when the Thread is Locked (Story 1.7, AC1, AC4).
+	 */
 	public function pinMessage(Room $chat, IComment $comment, Participant $participant, int $pinUntil): ?IComment {
+		// Story 1.7, AC1, AC4, AC7: the third enforcement seam - evaluated
+		// first, before the already-pinned no-op check, so a Locked
+		// thread always refuses the attempt uniformly.
+		$threadId = (int)$comment->getTopmostParentId() ?: (int)$comment->getId();
+		$this->threadService->ensureNotLocked($chat->getId(), $threadId);
+
 		$metaData = $comment->getMetaData() ?? [];
 
 		if (!empty($metaData[Message::METADATA_PINNED_MESSAGE_ID])) {
@@ -830,7 +923,16 @@ class ChatManager {
 		return $message;
 	}
 
+	/**
+	 * @throws LockedException with {@see LockedException::REASON_LOCKED} when the Thread is Locked (Story 1.7, AC1, AC4).
+	 */
 	public function unpinMessage(Room $chat, IComment $comment, ?Participant $participant): ?IComment {
+		// Story 1.7, AC1, AC4, AC7: the third enforcement seam - evaluated
+		// first, before the not-pinned no-op check, so a Locked thread
+		// always refuses the attempt uniformly.
+		$threadId = (int)$comment->getTopmostParentId() ?: (int)$comment->getId();
+		$this->threadService->ensureNotLocked($chat->getId(), $threadId);
+
 		$metaData = $comment->getMetaData() ?? [];
 
 		if (empty($metaData[Message::METADATA_PINNED_MESSAGE_ID])) {

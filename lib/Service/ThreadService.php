@@ -9,7 +9,12 @@ declare(strict_types=1);
 
 namespace OCA\Talk\Service;
 
+use OCA\Talk\Chat\CommentsManager;
+use OCA\Talk\Exceptions\ThreadProperty\AuthorityException;
+use OCA\Talk\Exceptions\ThreadProperty\LockedException;
+use OCA\Talk\Exceptions\ThreadProperty\StateException;
 use OCA\Talk\Model\Attendee;
+use OCA\Talk\Model\SelectHelper;
 use OCA\Talk\Model\Thread;
 use OCA\Talk\Model\ThreadAttendee;
 use OCA\Talk\Model\ThreadAttendeeMapper;
@@ -18,6 +23,8 @@ use OCA\Talk\Participant;
 use OCA\Talk\Room;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\Comments\IComment;
+use OCP\Comments\NotFoundException;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\ICache;
 use OCP\ICacheFactory;
@@ -33,8 +40,90 @@ class ThreadService {
 		private readonly ThreadAttendeeMapper $threadAttendeeMapper,
 		private readonly ITimeFactory $timeFactory,
 		private readonly ICacheFactory $cacheFactory,
+		private readonly CommentsManager $commentsManager,
 	) {
 		$this->cache = $this->cacheFactory->createDistributed('talk.threads');
+	}
+
+	/**
+	 * The single implementation of Thread Manager authority (AD-3): the
+	 * Thread Root Message author, or any moderator of the Conversation.
+	 * Every state, featuring, tag and rename endpoint must call this (or
+	 * {@see self::ensureThreadManager()}) rather than re-deriving the
+	 * expression.
+	 *
+	 * Guests and bots never qualify, regardless of authorship or
+	 * (guest-)moderator status (AC9, Consistency Conventions: "Guests and
+	 * bots are never Thread Managers"). Participant::isGuest() covers both
+	 * GUEST and GUEST_MODERATOR; hasModeratorPermissions(false) already
+	 * excludes GUEST_MODERATOR from the moderator branch below, but a
+	 * guest who authored the Thread Root Message must still be refused,
+	 * which is why the guest/bot check is a separate, earlier guard.
+	 *
+	 * The moderator check runs before the root-comment lookup, and is
+	 * therefore free of it: for a moderator viewing a list of Threads,
+	 * this method never touches the comments table at all (see Dev Notes
+	 * "Known tradeoff - per-row authority query" in the story file for the
+	 * cost this does incur for a non-moderator viewing a large list).
+	 */
+	public function isThreadManager(Thread $thread, Participant $participant): bool {
+		$attendee = $participant->getAttendee();
+		if ($participant->isGuest() || $attendee->getActorType() === Attendee::ACTOR_BOTS) {
+			return false;
+		}
+
+		if ($participant->hasModeratorPermissions(false)) {
+			return true;
+		}
+
+		try {
+			$comment = $this->getRootComment($thread);
+		} catch (NotFoundException) {
+			// Root comment can no longer be loaded - only moderators
+			// qualify (AC3), and that branch was already evaluated above.
+			return false;
+		}
+
+		return $comment->getActorType() === $attendee->getActorType()
+			&& $comment->getActorId() === $attendee->getActorId();
+	}
+
+	/**
+	 * Loads the Thread Root Message comment, mirroring
+	 * {@see \OCA\Talk\Chat\ChatManager::getComment()}'s object-type/
+	 * object-id check without depending on ChatManager - which already
+	 * injects ThreadService, so the reverse dependency would be a
+	 * container cycle (AD-3). A Thread's id *is* its root comment's id
+	 * (AD-5).
+	 *
+	 * @throws NotFoundException When the root comment no longer exists, or
+	 *                            does not belong to this Thread's room.
+	 */
+	private function getRootComment(Thread $thread): IComment {
+		$comment = $this->commentsManager->get((string)$thread->getId());
+
+		if ($comment->getObjectType() !== 'chat' || $comment->getObjectId() !== (string)$thread->getRoomId()) {
+			throw new NotFoundException('Message not found in the right context');
+		}
+
+		return $comment;
+	}
+
+	/**
+	 * Throwing counterpart of {@see self::isThreadManager()}, the seam
+	 * every management endpoint (this story's renameThread(), and Story
+	 * 1.4's four state-transition endpoints) calls to refuse a request
+	 * with a typed, distinguishable exception (AD-4) rather than each
+	 * re-deriving its own inline check-and-refuse.
+	 *
+	 * @throws AuthorityException with {@see AuthorityException::REASON_PERMISSION}
+	 *                            when $participant is not a Thread Manager
+	 *                            for $thread.
+	 */
+	public function ensureThreadManager(Thread $thread, Participant $participant): void {
+		if (!$this->isThreadManager($thread, $participant)) {
+			throw new AuthorityException(AuthorityException::REASON_PERMISSION);
+		}
 	}
 
 	public function createThread(Room $room, int $threadId, string $title): Thread {
@@ -51,6 +140,167 @@ class ThreadService {
 		$this->cache->set(self::CACHE_PREFIX . $room->getId() . '/' . $threadId, $thread->toJson(), 60 * 15);
 
 		return $thread;
+	}
+
+	/**
+	 * Guards a Thread state value ahead of any write to it.
+	 *
+	 * Used by {@see self::changeState()} (Story 1.4) so the state-change
+	 * endpoint calls this rather than re-deriving the valid-value check.
+	 *
+	 * @throws StateException with {@see StateException::REASON_VALUE} when
+	 *                         $state is not one of Thread::STATE_*
+	 */
+	public function validateState(int $state): void {
+		if (!in_array($state, [Thread::STATE_ONGOING, Thread::STATE_CLOSED, Thread::STATE_LOCKED], true)) {
+			throw new StateException(StateException::REASON_VALUE);
+		}
+	}
+
+	/**
+	 * Moves a Thread to a new lifecycle state (Story 1.4: close, lock,
+	 * reopen from Closed, reopen from Locked - AD-12's single endpoint for
+	 * all four transitions). This method does not check authority itself;
+	 * it has two distinct kinds of caller instead: Story 1.4's
+	 * manager-initiated transitions, which must check authority via
+	 * {@see self::ensureThreadManager()} before calling this, and Story
+	 * 1.5's {@see self::reviveIfClosed()}, which deliberately does not -
+	 * reviving a Closed Thread by posting into it requires no Thread
+	 * Manager authority at all.
+	 *
+	 * Requesting the state the Thread already has (AC8, e.g. closing an
+	 * already-Closed Thread) is a complete no-op: no mapper write, no
+	 * cache invalidation, and - critically - no reason update even when
+	 * $state is Locked and a different $reason is supplied (a reason
+	 * update only happens on a genuine transition *into* Locked; see the
+	 * story's Dev Notes "Assumption - reason update semantics").
+	 *
+	 * $reason is only inspected when $state is Thread::STATE_LOCKED; it is
+	 * ignored for every other target state. Whitespace-only is trimmed
+	 * down to null (AC11) rather than stored as a blank reason.
+	 *
+	 * @throws StateException with {@see StateException::REASON_VALUE} when
+	 *                         $state is not one of Thread::STATE_*
+	 * @throws \InvalidArgumentException with message 'reason' when $reason
+	 *                                    exceeds {@see Thread::LOCK_REASON_MAX_LENGTH}
+	 */
+	public function changeState(Thread $thread, int $state, ?string $reason = null): Thread {
+		$this->validateState($state);
+
+		// Widen to plain int: comparing $state against the narrow 0|1|2
+		// literal-union Thread::getState() returns, then separately
+		// against a single member of that same union below, otherwise
+		// makes Psalm (incorrectly) treat the two comparisons as
+		// contradictory (ParadoxicalCondition).
+		/** @var int $previousState */
+		$previousState = $thread->getState();
+		if ($state === $previousState) {
+			return $thread;
+		}
+
+		if ($state === Thread::STATE_LOCKED) {
+			$reason = $reason !== null ? trim($reason) : null;
+			if ($reason === '') {
+				$reason = null;
+			}
+			if ($reason !== null && mb_strlen($reason) > Thread::LOCK_REASON_MAX_LENGTH) {
+				throw new \InvalidArgumentException('reason');
+			}
+			$thread->setLockReason($reason);
+		}
+
+		$thread->setState($state);
+		$this->threadMapper->update($thread);
+
+		// AD-1, AC15: invalidate by removing the cache entry, never by
+		// re-setting it from the entity this mutator happens to hold -
+		// under AD-13's last-write-wins, doing so would republish a value
+		// a concurrent writer may already have superseded and pin it for
+		// the full 900s TTL.
+		$this->cache->remove(self::CACHE_PREFIX . $thread->getRoomId() . '/' . $thread->getId());
+
+		return $thread;
+	}
+
+	/**
+	 * Posting into a Closed Thread revives it to Ongoing (Story 1.5,
+	 * FR-3) - a side effect of the normal chat-post path, not a Thread
+	 * Manager action. Called from
+	 * {@see \OCA\Talk\Chat\ChatManager::sendMessage()} and
+	 * {@see \OCA\Talk\Chat\ChatManager::addSystemMessage()} (AD-2) with
+	 * the same $threadId those methods already resolved once for
+	 * {@see self::updateLastMessageInfoAfterReply()}, so every path that
+	 * posts content into a Thread revives it the same way, without a
+	 * second, separate id resolution.
+	 *
+	 * Deliberately bypasses {@see self::ensureThreadManager()} - unlike
+	 * Story 1.4's manager-initiated reopen, any participant who may post
+	 * in the Conversation revives a Closed Thread just by posting (AC1).
+	 *
+	 * A Locked Thread is left untouched: the asymmetry with Closed is by
+	 * design (AC5). Stories 1.6/1.7's write-refusal guard is what
+	 * actually keeps new content out of a Locked Thread; this method only
+	 * decides what a *successful* post does to the Thread's state
+	 * afterward, and a Locked Thread is never treated as revivable.
+	 *
+	 * No system message is produced (AC2) - the reply itself is the
+	 * record - and {@see self::changeState()}'s cache-remove-not-set
+	 * behaviour (AC6) is inherited for free, since this delegates to it.
+	 *
+	 * An unresolvable $threadId (stale, fabricated, or belonging to a
+	 * different room) is a silent no-op, never an error - callers pass
+	 * whatever id they already resolved without validating it first.
+	 */
+	public function reviveIfClosed(int $roomId, int $threadId): void {
+		try {
+			$thread = $this->findByThreadId($roomId, $threadId);
+		} catch (DoesNotExistException) {
+			return;
+		}
+
+		if ($thread->getState() !== Thread::STATE_CLOSED) {
+			return;
+		}
+
+		$this->changeState($thread, Thread::STATE_ONGOING);
+	}
+
+	/**
+	 * Story 1.6, AC1, AC3, AD-2, AD-4: the single shared write-refusal
+	 * guard for a Locked Thread. Called from
+	 * {@see \OCA\Talk\Chat\ChatManager::sendMessage()} and
+	 * {@see \OCA\Talk\Chat\ChatManager::addSystemMessage()} with each
+	 * method's own already-resolved effective thread id, evaluated
+	 * before their respective `commentsManager->save()` - a refusal that
+	 * happens after the save is not a refusal. Also called, as a
+	 * documented pre-flight exception, from a small number of controller
+	 * call sites whose write is not itself a chat comment and therefore
+	 * has a side effect (a poll entity, a moved file, a scheduled-message
+	 * row) that would otherwise happen before either ChatManager method
+	 * is ever reached (see Story 1.6 Dev Notes).
+	 *
+	 * Mirrors {@see self::reviveIfClosed()}'s tolerance for an
+	 * unresolvable thread id: a stale, fabricated, or foreign id is a
+	 * silent no-op, not an error - "not a real Thread here" is not this
+	 * guard's concern, and callers that need existence enforced use
+	 * {@see self::validateThread()} themselves. Deliberately performs no
+	 * authority check - FR-5 refuses every write regardless of who is
+	 * writing, unlike the Thread Manager-gated endpoints
+	 * {@see self::ensureThreadManager()} protects.
+	 *
+	 * @throws LockedException with {@see LockedException::REASON_LOCKED}
+	 *                          when the Thread is Locked.
+	 */
+	public function ensureNotLocked(int $roomId, int $threadId): void {
+		try {
+			$thread = $this->findByThreadId($roomId, $threadId);
+		} catch (DoesNotExistException) {
+			return;
+		}
+
+		if ($thread->getState() === Thread::STATE_LOCKED) {
+			throw new LockedException(LockedException::REASON_LOCKED);
+		}
 	}
 
 	/**
@@ -144,9 +394,13 @@ class ThreadService {
 		$limit = min(100, max(1, $limit));
 
 		$query = $this->connection->getQueryBuilder();
-		$query->select('a.*', 't.last_message_id', 't.num_replies', 't.last_activity', 't.name')
-			->selectAlias('t.id', 't_id')
-			->from('talk_thread_attendees', 'a')
+		$query->select('a.*');
+		// Row-key convention: always hydrate Thread rows through SelectHelper's
+		// th_-prefixed aliases, so this direct-query path and the joined-read
+		// path in ScheduledMessageMapper::findByRoomAndActor() stay reconcilable
+		// with Thread::createFromRow() (AD-1).
+		(new SelectHelper())->selectThreadsTable($query, 't', aliasAll: true);
+		$query->from('talk_thread_attendees', 'a')
 			->join('a', 'talk_threads', 't', $query->expr()->andX(
 				$query->expr()->eq('a.thread_id', 't.id'),
 				$query->expr()->eq('a.room_id', 't.room_id'),
@@ -280,5 +534,55 @@ class ThreadService {
 		} catch (DoesNotExistException) {
 			return false;
 		}
+	}
+
+	/**
+	 * Reaps Threads whose root comment no longer exists (Story 1.10, AC2,
+	 * AD-5: a Thread's id *is* its root comment's id, so message expiry -
+	 * which hard-deletes comment rows, unlike a tombstoning author/moderator
+	 * delete, which does not - leaves the talk_threads row (and its
+	 * talk_thread_attendees rows) with nothing that would otherwise ever
+	 * remove them).
+	 *
+	 * Bounded per call (AC3): {@see ThreadMapper::findOrphanedThreadIds()}'s
+	 * LIMIT means one call reaps at most $limit Threads; the caller
+	 * ({@see \OCA\Talk\BackgroundJob\ReapOrphanedThreads}) loops calls until
+	 * one returns fewer than $limit, mirroring
+	 * {@see \OCA\Talk\BackgroundJob\CleanupStaleSessions}'s drain pattern.
+	 *
+	 * AC4: every reaped Thread's cache entry is removed - never re-set,
+	 * per AD-1 - *before* its rows are deleted, in this same pass. That
+	 * ordering means a reader racing this method can only ever observe
+	 * "cache empty, mapper still has the row for a moment", never the
+	 * reverse ("cache still warm, row already gone"), which is the one
+	 * ordering that would let validateThread() keep answering true from a
+	 * stale cache entry for a Thread that no longer exists.
+	 *
+	 * AC6: nextcloud/spreed#16739 ("Delete empty Talk threads") is the
+	 * open upstream issue occupying this same ground. Its literal repro is
+	 * a *soft*-deleted (tombstoned) root - which, per AD-5/AC1, this
+	 * reaper deliberately never touches, since a tombstoned root still has
+	 * a `comments` row and therefore never matches
+	 * findOrphanedThreadIds()'s query. This method only ever fires on a
+	 * *hard*-deleted (expired) root. If/when upstream lands its own fix
+	 * for #16739, reconcile deliberately against that distinction rather
+	 * than assuming the two problems are identical.
+	 *
+	 * @param positive-int $limit
+	 * @return int Number of Threads reaped
+	 */
+	public function reapOrphanedThreads(int $limit): int {
+		$orphaned = $this->threadMapper->findOrphanedThreadIds($limit);
+		if ($orphaned === []) {
+			return 0;
+		}
+
+		foreach ($orphaned as $row) {
+			$this->cache->remove(self::CACHE_PREFIX . $row['room_id'] . '/' . $row['id']);
+		}
+
+		$ids = array_column($orphaned, 'id');
+		$this->threadAttendeeMapper->deleteByThreadIds($ids);
+		return $this->threadMapper->deleteByIds($ids);
 	}
 }

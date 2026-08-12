@@ -121,4 +121,60 @@ class ThreadMapper extends QBMapper {
 
 		return $query->executeStatement();
 	}
+
+	/**
+	 * Finds Threads whose root comment no longer exists - Story 1.10, AD-5:
+	 * a Thread's id *is* its root comment's id, so a hard-deleted (expired)
+	 * root comment row leaves the talk_threads row with nothing that ever
+	 * points back to it. A tombstoned (soft-deleted) root is not affected -
+	 * `comments.id` still exists for that row, so it never matches here
+	 * (Story 1.10, AC1).
+	 *
+	 * Bounded like {@see \OCA\Talk\Model\SessionMapper::findSessionIdsWithoutAttendee()}
+	 * (Story 1.10, AC3): a LEFT JOIN scoped by LIMIT, not a full-table
+	 * sweep - {@see \OCA\Talk\Service\ThreadService::reapOrphanedThreads()}
+	 * is the caller that turns repeated bounded calls into a full drain.
+	 *
+	 * @param positive-int $limit Maximum number of orphaned Threads to return
+	 * @return list<array{id: int, room_id: int}>
+	 */
+	public function findOrphanedThreadIds(int $limit): array {
+		$query = $this->db->getQueryBuilder();
+		$query->select('t.id', 't.room_id')
+			->from($this->getTableName(), 't')
+			->leftJoin('t', 'comments', 'c', $query->expr()->eq('t.id', 'c.id'))
+			->where($query->expr()->isNull('c.id'))
+			->setMaxResults($limit);
+
+		$result = $query->executeQuery();
+		$ids = [];
+		while ($row = $result->fetch()) {
+			$ids[] = [
+				'id' => (int)$row['id'],
+				'room_id' => (int)$row['room_id'],
+			];
+		}
+		$result->closeCursor();
+
+		return $ids;
+	}
+
+	/**
+	 * @param list<int> $ids
+	 */
+	public function deleteByIds(array $ids): int {
+		if ($ids === []) {
+			return 0;
+		}
+
+		$query = $this->db->getQueryBuilder();
+		$query->delete($this->getTableName())
+			->where($query->expr()->in(
+				'id',
+				$query->createNamedParameter($ids, IQueryBuilder::PARAM_INT_ARRAY),
+				IQueryBuilder::PARAM_INT_ARRAY,
+			));
+
+		return $query->executeStatement();
+	}
 }

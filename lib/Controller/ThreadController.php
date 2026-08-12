@@ -10,6 +10,8 @@ namespace OCA\Talk\Controller;
 
 use OCA\Talk\Chat\ChatManager;
 use OCA\Talk\Chat\MessageParser;
+use OCA\Talk\Exceptions\ThreadProperty\AuthorityException;
+use OCA\Talk\Exceptions\ThreadProperty\StateException;
 use OCA\Talk\Manager;
 use OCA\Talk\Middleware\Attribute\FederationSupported;
 use OCA\Talk\Middleware\Attribute\RequireModeratorOrNoLobby;
@@ -211,20 +213,13 @@ class ThreadController extends AEnvironmentAwareOCSController {
 			return new DataResponse(['error' => 'thread'], Http::STATUS_NOT_FOUND);
 		}
 
-		$attendee = $this->participant->getAttendee();
-		$isOwnMessage = false;
 		try {
-			$comment = $this->chatManager->getComment($this->room, (string)$threadId);
-			$isOwnMessage = $comment->getActorType() === $attendee->getActorType()
-				&& $comment->getActorId() === $attendee->getActorId();
-		} catch (NotFoundException) {
-			// Root message expired, only moderators can edit
-		}
-
-		if (!$isOwnMessage
-			&& !$this->participant->hasModeratorPermissions(false)) {
-			// Actor is not a moderator or not the owner of the message
-			return new DataResponse(['error' => 'permission'], Http::STATUS_FORBIDDEN);
+			// Story 1.3, AC1: the single authority implementation (AD-3) -
+			// root-message author OR moderator - lives in ThreadService,
+			// not re-derived here.
+			$this->threadService->ensureThreadManager($thread, $this->participant);
+		} catch (AuthorityException $e) {
+			return new DataResponse(['error' => $e->getReason()], Http::STATUS_FORBIDDEN);
 		}
 
 		try {
@@ -254,6 +249,118 @@ class ThreadController extends AEnvironmentAwareOCSController {
 			true,
 			$threadId,
 		);
+
+		$list = $this->prepareListOfThreads([$thread]);
+		/** @var TalkThreadInfo $threadInfo */
+		$threadInfo = array_shift($list);
+		return new DataResponse($threadInfo);
+	}
+
+	/**
+	 * Change the lifecycle state of a thread
+	 *
+	 * One endpoint serves all four transitions - close, lock, reopen from
+	 * Closed, reopen from Locked (AD-12) - the target state and the
+	 * Thread's current state together determine which transition, and
+	 * therefore which system message verb, applies.
+	 *
+	 * Required capability: `thread-management`
+	 *
+	 * @param int $threadId The thread ID to change the state for
+	 * @psalm-param non-negative-int $threadId
+	 * @param int $state New state
+	 * @psalm-param Thread::STATE_* $state
+	 * @param string|null $reason Optional reason, only meaningful (and only validated) when locking; ignored for every other target state (max. 4000 characters, see `config => threads => lock-reason-length`)
+	 * @return DataResponse<Http::STATUS_OK, TalkThreadInfo, array{}>|DataResponse<Http::STATUS_BAD_REQUEST, array{error: 'value'|'reason'}, array{}>|DataResponse<Http::STATUS_FORBIDDEN, array{error: 'permission'}, array{}>|DataResponse<Http::STATUS_NOT_FOUND, array{error: 'thread'}, array{}>
+	 *
+	 * 200: Thread state changed successfully
+	 * 400: The provided state or reason was invalid
+	 * 403: Not allowed, either not the original author or not a moderator
+	 * 404: Thread not found
+	 */
+	#[PublicPage]
+	#[RequireModeratorOrNoLobby]
+	#[RequireParticipant]
+	#[ApiRoute(verb: 'PUT', url: '/api/{apiVersion}/chat/{token}/threads/{threadId}/state', requirements: [
+		'apiVersion' => '(v1)',
+		'token' => '[a-z0-9]{4,30}',
+		'threadId' => '[0-9]+',
+	])]
+	public function setState(int $threadId, int $state, ?string $reason = null): DataResponse {
+		// Story 1.4, AD-18: deliberately no #[FederationSupported] here -
+		// no new Thread endpoint is proxied over federation. Omitting the
+		// attribute makes InjectionMiddleware::checkFederationSupport()
+		// refuse the request outright for a federated room.
+		try {
+			$thread = $this->threadService->findByThreadId($this->room->getId(), $threadId);
+		} catch (DoesNotExistException) {
+			return new DataResponse(['error' => 'thread'], Http::STATUS_NOT_FOUND);
+		}
+
+		try {
+			// Story 1.3, AC1: the single authority implementation (AD-3) -
+			// root-message author OR moderator - lives in ThreadService,
+			// not re-derived here.
+			$this->threadService->ensureThreadManager($thread, $this->participant);
+		} catch (AuthorityException $e) {
+			return new DataResponse(['error' => $e->getReason()], Http::STATUS_FORBIDDEN);
+		}
+
+		$previousState = $thread->getState();
+
+		try {
+			$thread = $this->threadService->changeState($thread, $state, $reason);
+		} catch (StateException $e) {
+			return new DataResponse(['error' => $e->getReason()], Http::STATUS_BAD_REQUEST);
+		} catch (\InvalidArgumentException $e) {
+			/** @var 'reason' $message */
+			$message = $e->getMessage();
+			return new DataResponse(['error' => $message], Http::STATUS_BAD_REQUEST);
+		}
+
+		if ($previousState !== $thread->getState()) {
+			// AC8: requesting the state the Thread already has never
+			// reaches here - ThreadService::changeState() is a no-op in
+			// that case - so the system message is never duplicated.
+			if ($thread->getState() === Thread::STATE_LOCKED) {
+				$verb = 'thread_locked';
+			} elseif ($thread->getState() === Thread::STATE_CLOSED) {
+				$verb = 'thread_closed';
+			} elseif ($previousState === Thread::STATE_LOCKED) {
+				$verb = 'thread_unlocked';
+			} else {
+				$verb = 'thread_reopened';
+			}
+
+			try {
+				$comment = $this->chatManager->getComment($this->room, (string)$threadId);
+			} catch (NotFoundException) {
+				// Root message expired, continuing without replying
+				$comment = null;
+			}
+
+			$parameters = ['thread' => $threadId, 'title' => $thread->getName()];
+			if ($verb === 'thread_locked' && $thread->getLockReason() !== null) {
+				// AC10: the reason travels as message parameter data, never
+				// concatenated into the rendered message text.
+				$parameters['reason'] = $thread->getLockReason();
+			}
+
+			$this->chatManager->addSystemMessage(
+				$this->room,
+				$this->participant,
+				$this->participant->getAttendee()->getActorType(),
+				$this->participant->getAttendee()->getActorId(),
+				json_encode(['message' => $verb, 'parameters' => $parameters]),
+				$this->timeFactory->getDateTime(),
+				false,
+				null,
+				$comment,
+				true,
+				true,
+				$threadId,
+			);
+		}
 
 		$list = $this->prepareListOfThreads([$thread]);
 		/** @var TalkThreadInfo $threadInfo */
@@ -316,6 +423,17 @@ class ThreadController extends AEnvironmentAwareOCSController {
 			$list[] = [
 				'thread' => $thread->toArray($room),
 				'attendee' => $attendee->jsonSerialize(),
+				// Story 1.3, AC6: a per-request, per-actor computed value,
+				// not a persisted Thread column - it must never be added
+				// to Thread::toJson()/toArray()/the distributed cache
+				// (AD-1), which is shared across every participant
+				// reading this Thread, or one actor's authority answer
+				// would leak to every other reader for up to 900s (NFR-4).
+				// Costs a per-row root-comment query for a non-moderator
+				// viewing a Thread they did not start (see the story's Dev
+				// Notes "Known tradeoff - per-row authority query"); free
+				// for a moderator, who short-circuits before that lookup.
+				'canManage' => $this->threadService->isThreadManager($thread, $participant),
 				'first' => $firstMessage?->toArray($this->getResponseFormat(), $thread),
 				'last' => $lastMessage?->toArray($this->getResponseFormat(), $thread),
 			];

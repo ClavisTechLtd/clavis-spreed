@@ -481,6 +481,33 @@ class SystemMessageTest extends TestCase {
 				['actor' => ['id' => 'actor', 'type' => 'user', 'server' => 'federated.tld'], 'federated_user' => ['type' => 'user', 'id' => 'actor', 'server' => 'federated.tld']],
 				$federatedActor = true,
 			],
+			// Story 1.4, AC5: the four lifecycle transitions.
+			['thread_closed', ['thread' => 55, 'title' => 'General discussion'], 'recipient',
+				'{actor} closed thread {title}',
+				['actor' => ['id' => 'actor', 'type' => 'user'], 'title' => ['type' => 'highlight', 'id' => 'thread/55', 'name' => 'General discussion']],
+			],
+			['thread_closed', ['thread' => 55, 'title' => 'General discussion'], 'actor',
+				'You closed thread {title}',
+				['actor' => ['id' => 'actor', 'type' => 'user'], 'title' => ['type' => 'highlight', 'id' => 'thread/55', 'name' => 'General discussion']],
+			],
+			// AC10: the reason travels as message parameter data.
+			['thread_locked', ['thread' => 55, 'title' => 'General discussion', 'reason' => 'Repeated off-topic discussion'], 'recipient',
+				'{actor} locked thread {title} ({reason})',
+				['actor' => ['id' => 'actor', 'type' => 'user'], 'reason' => ['type' => 'highlight', 'id' => 'thread-lock-reason', 'name' => 'Repeated off-topic discussion'], 'title' => ['type' => 'highlight', 'id' => 'thread/55', 'name' => 'General discussion']],
+			],
+			// AC11: locking without a reason produces the shorter phrasing, no 'reason' parameter.
+			['thread_locked', ['thread' => 55, 'title' => 'General discussion'], 'recipient',
+				'{actor} locked thread {title}',
+				['actor' => ['id' => 'actor', 'type' => 'user'], 'title' => ['type' => 'highlight', 'id' => 'thread/55', 'name' => 'General discussion']],
+			],
+			['thread_reopened', ['thread' => 55, 'title' => 'General discussion'], 'recipient',
+				'{actor} reopened thread {title}',
+				['actor' => ['id' => 'actor', 'type' => 'user'], 'title' => ['type' => 'highlight', 'id' => 'thread/55', 'name' => 'General discussion']],
+			],
+			['thread_unlocked', ['thread' => 55, 'title' => 'General discussion'], 'recipient',
+				'{actor} unlocked thread {title}',
+				['actor' => ['id' => 'actor', 'type' => 'user'], 'title' => ['type' => 'highlight', 'id' => 'thread/55', 'name' => 'General discussion']],
+			],
 		];
 	}
 

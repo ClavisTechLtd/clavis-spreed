@@ -15,6 +15,7 @@ import type {
 } from '../types/index.ts'
 
 import { isCancel } from '@nextcloud/axios'
+import { showError } from '@nextcloud/dialogs'
 import { subscribe, unsubscribe } from '@nextcloud/event-bus'
 import { t } from '@nextcloud/l10n'
 import { computed, inject, onBeforeUnmount, provide, ref, watch } from 'vue'
@@ -25,7 +26,7 @@ import { EventBus } from '../services/EventBus.ts'
 import { useChatStore } from '../stores/chat.ts'
 import { useChatExtrasStore } from '../stores/chatExtras.ts'
 import { useGuestNameStore } from '../stores/guestName.ts'
-import { isAxiosErrorResponse } from '../types/guards.ts'
+import { isAxiosErrorResponse, isThreadNotFoundError } from '../types/guards.ts'
 import { debugTimer } from '../utils/debugTimer.ts'
 import { isFileShareMessage, tryLocalizeDeletedMessage, tryLocalizeSystemMessage } from '../utils/message.ts'
 import { useGetThreadId } from './useGetThreadId.ts'
@@ -400,6 +401,21 @@ export function useGetMessagesProvider() {
 				debugTimer.end(`${token} | get context`, 'status 304')
 				store.dispatch('loadedMessagesOfConversation', { token })
 				stopFetchingOldMessages.value = true
+			} else if (threadId !== 0 && isThreadNotFoundError(exception)) {
+				// Story 1.9, AC4: the Thread this notification/link pointed to no
+				// longer exists (deleted, expired, or never valid). Land the
+				// participant in the Conversation's main chat with an
+				// explanation instead of leaving them on a blank/broken Thread
+				// view. Guarded on the function's own `threadId` parameter
+				// (not the reactive ref, which this branch is about to clear)
+				// so the one-shot retry below can never re-trigger this branch.
+				debugTimer.end(`${token} | get context`, 'status 404 (thread)')
+				showError(t('spreed', 'This thread no longer exists'))
+				contextThreadId.value = 0
+				loadingOldMessages.value = false
+				isInitialisingMessages.value = false
+				await getMessageContext(token, messageId, 0)
+				return
 			}
 		}
 		loadingOldMessages.value = false

@@ -232,3 +232,7 @@
 * `recording-chunked-upload` (local) - Whether the recording backend can request a temporary upload share to upload large recordings via chunked public WebDAV before finishing with the store endpoint
 * `config => call => external-call-service` (local) - The target URL for an external call service if one is configured
 * `bot-features-api` (local) - Whether bots can fetch their own enabled features using their shared secret
+
+## 24.0.3
+* `thread-management` (local) - Whether Threads support a lifecycle state (Ongoing, Closed, Locked)
+* `config => threads => lock-reason-length` (local) - Maximum length in characters allowed for a Thread's lock reason

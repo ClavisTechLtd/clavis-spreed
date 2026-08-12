@@ -24,17 +24,35 @@ use OCP\DB\Types;
  * @method void setLastActivity(\DateTime $lastActivity)
  * @method \DateTime|null getLastActivity()
  * @method void setName(string $name)
+ * @method void setState(int $state)
+ * @method 0|1|2 getState()
+ * @method void setLockReason(?string $lockReason)
+ * @method ?string getLockReason()
  *
  * @psalm-import-type TalkThread from ResponseDefinitions
  */
 class Thread extends Entity {
 	public const THREAD_NONE = 0;
 	public const THREAD_CREATE = -1;
+
+	// Thread lifecycle state (PRD's Ongoing/Closed/Locked) - unrelated to the
+	// THREAD_NONE/THREAD_CREATE sentinels above, which identify the thread id
+	// itself, not its state.
+	public const STATE_ONGOING = 0;
+	public const STATE_CLOSED = 1;
+	public const STATE_LOCKED = 2;
+
+	// Story 1.4, AC11: bounded free-text reason for a Locked Thread, same
+	// bound shape as the moderator-authored Ban::NOTE_MAX_LENGTH precedent.
+	public const LOCK_REASON_MAX_LENGTH = 4000;
+
 	protected int $roomId = 0;
 	protected int $lastMessageId = 0;
 	protected int $numReplies = 0;
 	protected ?\DateTime $lastActivity = null;
 	protected string $name = '';
+	protected int $state = self::STATE_ONGOING;
+	protected ?string $lockReason = null;
 
 	public function __construct() {
 		$this->addType('roomId', Types::BIGINT);
@@ -42,16 +60,27 @@ class Thread extends Entity {
 		$this->addType('numReplies', Types::BIGINT);
 		$this->addType('lastActivity', Types::DATETIME);
 		$this->addType('name', Types::STRING);
+		$this->addType('state', Types::INTEGER);
+		$this->addType('lockReason', Types::STRING);
 	}
 
+	/**
+	 * Row-key convention: this expects the `th_`-prefixed shape produced by
+	 * {@see SelectHelper::selectThreadsTable()} with `aliasAll: true` — the only
+	 * variant of that helper with a caller today. Every direct query that hydrates
+	 * a Thread via this method must select through that helper (or reproduce its
+	 * `th_*` aliases exactly) rather than inventing another prefix.
+	 */
 	public static function createFromRow(array $row): Thread {
 		$thread = new Thread();
-		$thread->setId((int)$row['t_id']);
-		$thread->setRoomId((int)$row['room_id']);
-		$thread->setLastMessageId((int)$row['last_message_id']);
-		$thread->setNumReplies((int)$row['num_replies']);
-		$thread->setLastActivity(new \DateTime($row['last_activity']));
-		$thread->setName($row['name']);
+		$thread->setId((int)$row['th_id']);
+		$thread->setRoomId((int)$row['th_room_id']);
+		$thread->setLastMessageId((int)$row['th_last_message_id']);
+		$thread->setNumReplies((int)$row['th_num_replies']);
+		$thread->setLastActivity(new \DateTime($row['th_last_activity']));
+		$thread->setName($row['th_name']);
+		$thread->setState((int)$row['th_state']);
+		$thread->setLockReason($row['th_lock_reason'] !== null ? (string)$row['th_lock_reason'] : null);
 		return $thread;
 	}
 
@@ -69,6 +98,12 @@ class Thread extends Entity {
 		$thread->setNumReplies((int)$row['num_replies']);
 		$thread->setLastActivity(new \DateTime('@' . $row['last_activity']));
 		$thread->setName($row['name']);
+		// Defensive fallback (unlike createFromRow() above): this reads the
+		// distributed cache, which has a 900s TTL, so a cache entry written by
+		// pre-upgrade code (no 'state' key) can still be read here for up to
+		// 15 minutes after this field was deployed.
+		$thread->setState((int)($row['state'] ?? self::STATE_ONGOING));
+		$thread->setLockReason($row['lock_reason'] ?? null);
 		return $thread;
 	}
 
@@ -84,6 +119,8 @@ class Thread extends Entity {
 			'num_replies' => $this->getNumReplies(),
 			'last_activity' => $this->getLastActivity()?->getTimestamp() ?? 0,
 			'name' => $this->getName(),
+			'state' => $this->getState(),
+			'lock_reason' => $this->getLockReason(),
 		], flags: JSON_THROW_ON_ERROR);
 	}
 
@@ -108,6 +145,8 @@ class Thread extends Entity {
 			'numReplies' => max(0, $this->getNumReplies()),
 			'lastActivity' => max(0, $this->getLastActivity()?->getTimestamp() ?? 0),
 			'title' => $this->getName(),
+			'state' => $this->getState(),
+			'lockReason' => $this->getLockReason(),
 		];
 	}
 }

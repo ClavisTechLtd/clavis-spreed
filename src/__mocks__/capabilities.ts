@@ -190,6 +190,9 @@ export const mockedCapabilities: Capabilities = {
 				'sort-order': 'activity',
 				'group-mode': 'none',
 			},
+			threads: {
+				'lock-reason-length': 4000,
+			},
 			federation: {
 				enabled: false,
 				'incoming-enabled': false,
@@ -243,6 +246,9 @@ export const mockedCapabilities: Capabilities = {
 				'description-length',
 				'sort-order',
 				'group-mode',
+			],
+			threads: [
+				'lock-reason-length',
 			],
 			federation: [
 				'enabled',
