@@ -54,6 +54,21 @@ use Psr\Log\LoggerInterface;
 
 class Notifier implements INotifier {
 
+	/**
+	 * Story 4.1: upper bound, in *characters*, for the Thread Title rendered
+	 * into a notification subject - matching how {@see ThreadService} itself
+	 * bounds a title (`mb_strlen()`/`mb_substr()`), so a Vietnamese or CJK title
+	 * keeps as many characters as an English one.
+	 *
+	 * Deliberately independent of - and well below - the 100 character message
+	 * preview budget, so bounding the title never shortens the preview.
+	 *
+	 * This is *not* a byte budget: the push payload size limit is Story 4.3's
+	 * responsibility, which trims the assembled payload as a whole, and must
+	 * not be smuggled into this per-field character bound.
+	 */
+	public const THREAD_NAME_MAX_LENGTH = 64;
+
 	/** @var Room[] */
 	protected array $rooms = [];
 	/** @var Participant[][] */
@@ -935,13 +950,62 @@ class Notifier implements INotifier {
 			unset($richSubjectParameters['user']);
 		}
 
-		$placeholders = $replacements = [];
-		foreach ($richSubjectParameters as $placeholder => $parameter) {
-			$placeholders[] = '{' . $placeholder . '}';
-			$replacements[] = $parameter['name'];
+		// Story 4.1: the Thread Title arrives as message parameter data
+		// (@see \OCA\Talk\Chat\Notifier::createNotification()), so no Thread is
+		// looked up here. Appending it once, after the subject ladder, gives all
+		// nine gated subjects the title without a single subject template having
+		// to carry a `{thread}` placeholder, and works for both the in-app shape
+		// (`{user} in {call}`) and the push shape (`{user} in {call}\n{message}`)
+		// because only the first line is touched.
+		// AD-20: a Thread Title is user-authored content of message grade, so it
+		// is withheld wherever the sensitive-conversation branch above already
+		// withholds the message preview - that branch resets
+		// `$richSubjectParameters` and must stay authoritative.
+		// Notifications persisted before this change carry no `threadName` and
+		// therefore render exactly as they did.
+		if (!$participant->getAttendee()->isSensitive()
+			&& isset($messageParameters['threadId'], $messageParameters['threadName'])
+			&& is_string($messageParameters['threadName'])
+			&& trim($messageParameters['threadName']) !== '') {
+			// A Thread Title is user-authored and only trimmed on input (creation
+			// does not even trim), so it can contain line breaks. The push subject
+			// shape is "{header}\n{message}" and push clients split on "\n" to form
+			// the notification title and body, so an embedded line break would let
+			// the title's author forge a body of their choosing on a lock screen.
+			// Every C0 control character is therefore collapsed to a single space
+			// *before* the title is bounded. The character class is ASCII-only and
+			// intentionally used without the `u` modifier: no byte in [\x00-\x1F]
+			// or \x7F can occur inside a multi-byte UTF-8 sequence, so this is
+			// byte-safe and - unlike a `/u` pattern - cannot return null on
+			// malformed input.
+			$threadName = preg_replace('/[\x00-\x1F\x7F]+/', ' ', $messageParameters['threadName']);
+			if (mb_strlen($threadName) > self::THREAD_NAME_MAX_LENGTH) {
+				$threadName = mb_substr($threadName, 0, self::THREAD_NAME_MAX_LENGTH) . '…';
+			}
+
+			$richSubjectParameters['thread'] = [
+				'type' => 'highlight',
+				'id' => 'thread/' . (string)$messageParameters['threadId'],
+				'name' => $threadName,
+			];
+
+			$lines = explode("\n", $subject, 2);
+			// TRANSLATORS {thread} is the user-authored title of the thread the activity happened in
+			$lines[0] .= ' ' . $l->t('(in thread {thread})');
+			$subject = implode("\n", $lines);
 		}
 
-		$notification->setParsedSubject(str_replace($placeholders, $replacements, $subject))
+		// `strtr()` rather than `str_replace()` with array arguments: the latter
+		// applies its pairs sequentially and rescans the output of earlier
+		// replacements, so a conversation name or guest display name containing
+		// the literal text "{thread}" would be overwritten by a later pair.
+		// `strtr()` substitutes in a single pass and never rescans its own output.
+		$placeholderMap = [];
+		foreach ($richSubjectParameters as $placeholder => $parameter) {
+			$placeholderMap['{' . $placeholder . '}'] = $parameter['name'];
+		}
+
+		$notification->setParsedSubject(strtr($subject, $placeholderMap))
 			->setRichSubject($subject, $richSubjectParameters);
 
 		return $notification;

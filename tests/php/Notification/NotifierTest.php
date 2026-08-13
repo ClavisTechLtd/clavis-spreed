@@ -803,11 +803,301 @@ class NotifierTest extends TestCase {
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77,
 			],
+
+			// Story 4.1, AC1: every subject routed to `parseChatMessage()` by the
+			// gate in `Notifier::prepare()` gains the Thread Title. The gate is the
+			// authoritative enumeration, so there is one case per subject below -
+			// `reply`, `mention`, `mention_direct`, `mention_group`, `mention_team`,
+			// `mention_all`, `chat`, `reaction` and `reminder`.
+			'thread title on reply' => [
+				$subject = 'reply', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user replied to your message in conversation Room name (in thread Thread 1)',
+				[
+					'{user} replied to your message in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
+			],
+			'thread title on mention' => [
+				$subject = 'mention', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user mentioned you in conversation Room name (in thread Thread 1)',
+				[
+					'{user} mentioned you in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
+			],
+			'thread title on mention_direct' => [
+				$subject = 'mention_direct', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user mentioned you in conversation Room name (in thread Thread 1)',
+				[
+					'{user} mentioned you in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
+			],
+			'thread title on mention_group' => [
+				$subject = 'mention_group', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser', 'sourceId' => 'test-group'], 'Test user', 'Room name',
+				'Test user mentioned group test-group in conversation Room name (in thread Thread 1)',
+				[
+					'{user} mentioned group {group} in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'group' => ['type' => 'user-group', 'id' => 'test-group', 'name' => 'test-group'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
+			],
+			'thread title on mention_team' => [
+				$subject = 'mention_team', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser', 'sourceId' => 'test-team'], 'Test user', 'Room name',
+				'Test user mentioned team test-team in conversation Room name (in thread Thread 1)',
+				[
+					'{user} mentioned team {team} in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'team' => ['type' => 'highlight', 'id' => 'test-team', 'name' => 'test-team'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
+			],
+			'thread title on mention_all' => [
+				$subject = 'mention_all', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user mentioned everyone in conversation Room name (in thread Thread 1)',
+				[
+					'{user} mentioned everyone in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
+			],
+			'thread title on chat' => [
+				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user sent a message in conversation Room name (in thread Thread 1)',
+				[
+					'{user} sent a message in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
+			],
+			'thread title on reaction' => [
+				$subject = 'reaction', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser', 'reaction' => '👍'], 'Test user', 'Room name',
+				'Test user reacted with 👍 to your message in conversation Room name (in thread Thread 1)',
+				[
+					'{user} reacted with {reaction} to your message in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'reaction' => ['type' => 'highlight', 'id' => '👍', 'name' => '👍'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
+			],
+			'thread title on reminder' => [
+				$subject = 'reminder', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Reminder: Test user in conversation Room name (in thread Thread 1)',
+				[
+					'Reminder: {user} in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
+			],
+
+			// Story 4.1: the thread fragment is appended to the first line only, so
+			// the push shape keeps the message preview on its own line.
+			'thread title on a push notification touches the first line only' => [
+				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user in Room name (in thread Thread 1)' . "\n" . 'Hi @Administrator',
+				[
+					'{user} in {call} (in thread {thread})' . "\n" . '{message}',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'message' => ['type' => 'highlight', 'id' => '123456789', 'name' => 'Hi @Administrator'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = true, $threadId = 77, $threadName = 'Thread 1',
+			],
+
+			// Story 4.1: activity outside any Thread is byte-identical to before.
+			'no thread means no thread fragment' => [
+				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user sent a message in conversation Room name',
+				[
+					'{user} sent a message in conversation {call}',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = null, $threadName = null,
+			],
+
+			// Story 4.1: notifications persisted before this change carry `threadId`
+			// but no `threadName` and must render exactly as they do today.
+			'legacy notification with threadId but no threadName' => [
+				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user sent a message in conversation Room name',
+				[
+					'{user} sent a message in conversation {call}',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = null,
+			],
+
+			// Story 4.1: the title is length bounded with a visible truncation
+			// indicator, and the bound is applied to the title alone - the 100
+			// character message preview budget is untouched. The bound counts
+			// *characters*, so the three cases below (ASCII, Vietnamese, Japanese)
+			// all keep exactly `THREAD_NAME_MAX_LENGTH` characters.
+			'over-length thread title is truncated with an ellipsis' => [
+				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user sent a message in conversation Room name (in thread ' . str_repeat('a', 64) . '…)',
+				[
+					'{user} sent a message in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => str_repeat('a', 64) . '…'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = str_repeat('a', 70),
+			],
+
+			// Story 4.1: a Vietnamese title is shortened on a character boundary,
+			// never mid-character, and keeps the same *character* count as the
+			// ASCII case above - it is not bounded by its JSON-escaped byte length,
+			// which would have left it with roughly a third of the characters.
+			'over-length Vietnamese thread title keeps the full character budget' => [
+				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user sent a message in conversation Room name (in thread Chủ đề thảo luận về việc triển khai tính năng mới của sản phẩm t…)',
+				[
+					'{user} sent a message in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Chủ đề thảo luận về việc triển khai tính năng mới của sản phẩm t…'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77,
+				$threadName = 'Chủ đề thảo luận về việc triển khai tính năng mới của sản phẩm trong quý này',
+			],
+
+			// Story 4.1: the same for a CJK title - 64 characters kept, exactly as
+			// many as the ASCII case, where a byte bound would have kept about 9.
+			'over-length Japanese thread title keeps the full character budget' => [
+				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user sent a message in conversation Room name (in thread ' . str_repeat('あ', 64) . '…)',
+				[
+					'{user} sent a message in conversation {call} (in thread {thread})',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => str_repeat('あ', 64) . '…'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77,
+				$threadName = str_repeat('あ', 70),
+			],
+
+			// Story 4.1, security: the push subject shape is "{header}\n{message}"
+			// and push clients split on the line break to form the notification
+			// title and body. A Thread Title is user-authored and only trimmed on
+			// input, so a line break inside it would let its author forge the body
+			// shown on a lock screen. Control characters are collapsed to a single
+			// space, so the rendered subject still has exactly one line break - the
+			// one the push shape itself contributes.
+			'thread title with a line break can not forge a second push line' => [
+				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user in Room name (in thread Thread 1 Your account was accessed)' . "\n" . 'Hi @Administrator',
+				[
+					'{user} in {call} (in thread {thread})' . "\n" . '{message}',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'message' => ['type' => 'highlight', 'id' => '123456789', 'name' => 'Hi @Administrator'],
+						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1 Your account was accessed'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = true, $threadId = 77,
+				$threadName = "Thread 1\r\nYour account was accessed",
+			],
+
+			// Story 4.1: `createThread()` does not trim, so a whitespace-only title
+			// can reach the renderer. It must not render "(in thread    )".
+			'whitespace-only thread title renders no thread fragment' => [
+				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Test user sent a message in conversation Room name',
+				[
+					'{user} sent a message in conversation {call}',
+					[
+						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+					],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = " \t \n ",
+			],
+
+			// Story 4.1 / AD-20: a Thread Title is user-authored content of message
+			// grade, so it is withheld exactly where the shipped sensitive
+			// conversation mechanism already withholds the message preview.
+			'sensitive conversation withholds the thread title' => [
+				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'You received a message in a private conversation',
+				[
+					'You received a message in a private conversation',
+					[],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1', $isSensitive = true,
+			],
+
+			// Story 4.1 / AD-20: the push shape is where a withheld title matters
+			// most - a lock screen - so the sensitive branch has to hold there too.
+			'sensitive conversation withholds the thread title on a push notification' => [
+				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
+				'Private conversation' . "\n" . 'New message',
+				[
+					'Private conversation' . "\n" . 'New message',
+					[],
+				],
+				$deletedUser = false, $guestName = null, $isPushNotification = true, $threadId = 77, $threadName = 'Thread 1', $isSensitive = true,
+			],
 		];
 	}
 
 	#[DataProvider('dataPrepareChatMessage')]
-	public function testPrepareChatMessage(string $subject, int $roomType, array $subjectParameters, ?string $displayName, string $roomName, string $parsedSubject, array $richSubject, bool $deletedUser = false, ?string $guestName = null, bool $isPushNotification = false, ?int $threadId = null): void {
+	public function testPrepareChatMessage(string $subject, int $roomType, array $subjectParameters, ?string $displayName, string $roomName, string $parsedSubject, array $richSubject, bool $deletedUser = false, ?string $guestName = null, bool $isPushNotification = false, ?int $threadId = null, ?string $threadName = null, bool $isSensitive = false): void {
 		/** @var INotification&MockObject $notification */
 		$notification = $this->createMock(INotification::class);
 		$l = $this->createMock(IL10N::class);
@@ -851,6 +1141,7 @@ class NotifierTest extends TestCase {
 
 		$attendee = Attendee::fromRow([
 			'important' => false,
+			'sensitive' => $isSensitive,
 		]);
 		$participant = $this->createMock(Participant::class);
 		$participant->method('getAttendee')
@@ -989,7 +1280,7 @@ class NotifierTest extends TestCase {
 			->method('setRichSubject')
 			->with($richSubject[0], $richSubject[1])
 			->willReturnSelf();
-		if ($isPushNotification) {
+		if ($isPushNotification || $isSensitive) {
 			$notification->expects($this->never())
 				->method('setParsedMessage');
 		} else {
@@ -999,7 +1290,10 @@ class NotifierTest extends TestCase {
 				->willReturnSelf();
 		}
 
-		$notification->expects($this->exactly(2))
+		// The `reminder` subject compares the message author against the recipient
+		// to pick between the "You" and the "{user}" wording, which is one
+		// `getUser()` call on top of the two every subject makes.
+		$notification->expects($this->exactly($subject === 'reminder' && !$isSensitive ? 3 : 2))
 			->method('getUser')
 			->willReturn('recipient');
 		$notification->expects($this->once())
@@ -1015,9 +1309,16 @@ class NotifierTest extends TestCase {
 			->willReturn('chat');
 		$notification->method('getObjectId')
 			->willReturn('roomToken');
+		$messageParameters = ['commentId' => '23'];
+		if ($threadId !== null) {
+			$messageParameters['threadId'] = $threadId;
+		}
+		if ($threadName !== null) {
+			$messageParameters['threadName'] = $threadName;
+		}
 		$notification->expects($this->once())
 			->method('getMessageParameters')
-			->willReturn($threadId !== null ? ['commentId' => '23', 'threadId' => $threadId] : ['commentId' => '23']);
+			->willReturn($messageParameters);
 
 		$this->assertEquals($notification, $this->notifier->prepare($notification, 'de'));
 

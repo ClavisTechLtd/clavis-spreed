@@ -83,21 +83,21 @@ Feature: chat-4/threads
     And user "participant2" sends reply "Message 1-2" on message "Message 1" to room "room" with 201
     And user "participant1" has the following notifications
       | app    | object_type | object_id        | subject                                                               |
-      | spreed | chat        | room/Message 1-2/Thread 1 | participant2-displayname replied to your message in conversation room |
+      | spreed | chat        | room/Message 1-2/Thread 1 | participant2-displayname replied to your message in conversation room (in thread Thread 1) |
     And user "participant1" subscribes to thread "Message 1" in room "room" with notification level 1 with 200
       | t.id      | t.title  | t.numReplies | t.lastMessage | a.notificationLevel | firstMessage | lastMessage |
       | Message 1 | Thread 1 | 2            | Message 1-2   | 1                   | Message 1    | Message 1-2 |
     And user "participant2" sends reply "Message 1-3" on thread "Thread 1" to room "room" with 201
     And user "participant1" has the following notifications
       | app    | object_type | object_id                 | subject                                                               |
-      | spreed | chat        | room/Message 1-3/Thread 1 | participant2-displayname sent a message in conversation room          |
-      | spreed | chat        | room/Message 1-2/Thread 1 | participant2-displayname replied to your message in conversation room |
+      | spreed | chat        | room/Message 1-3/Thread 1 | participant2-displayname sent a message in conversation room (in thread Thread 1)          |
+      | spreed | chat        | room/Message 1-2/Thread 1 | participant2-displayname replied to your message in conversation room (in thread Thread 1) |
     When user "participant2" sends reply "@participant1" on thread "Thread 1" to room "room" with 201
     Then user "participant1" has the following notifications
       | app    | object_type | object_id                   | subject                                                     |
-      | spreed | chat        | room/@participant1/Thread 1 | participant2-displayname mentioned you in conversation room |
-      | spreed | chat        | room/Message 1-3/Thread 1   | participant2-displayname sent a message in conversation room          |
-      | spreed | chat        | room/Message 1-2/Thread 1   | participant2-displayname replied to your message in conversation room |
+      | spreed | chat        | room/@participant1/Thread 1 | participant2-displayname mentioned you in conversation room (in thread Thread 1) |
+      | spreed | chat        | room/Message 1-3/Thread 1   | participant2-displayname sent a message in conversation room (in thread Thread 1)          |
+      | spreed | chat        | room/Message 1-2/Thread 1   | participant2-displayname replied to your message in conversation room (in thread Thread 1) |
 
   Scenario: Thread titles are trimmed
     Given user "participant1" creates room "room" (v4)
@@ -220,10 +220,28 @@ Feature: chat-4/threads
       | Message 1 | room1   | Thread 1 | 1            | Message 2     | 0                   | Message 1    | Message 2   |
     And user "participant1" has the following notifications
       | app    | object_type | object_id       | subject                                                                |
-      | spreed | chat        | room1/Message 2/Thread 1 | participant2-displayname replied to your message in conversation room1 |
+      | spreed | chat        | room1/Message 2/Thread 1 | participant2-displayname replied to your message in conversation room1 (in thread Thread 1) |
     Then user "participant2" sees the following subscribed threads
       | t.id      | t.token | t.title  | t.numReplies | t.lastMessage | a.notificationLevel | firstMessage | lastMessage |
       | Message 1 | room1   | Thread 1 | 1            | Message 2     | 0                   | Message 1    | Message 2   |
+
+  # Story 4.1: a notification about activity inside a Thread names that Thread,
+  # so the recipient can triage it without opening it. Activity outside any
+  # Thread is unchanged and gains no thread text. The title is user content and
+  # is never translated, hence the multibyte title here.
+  Scenario: Thread notifications name the thread
+    Given user "participant1" creates room "room1" (v4)
+      | roomType | 2 |
+      | roomName | room1 |
+    And user "participant1" adds user "participant2" to room "room1" with 200 (v4)
+    And user "participant1" sends thread "Bảo trì hệ thống" with message "Message 1" to room "room1" with 201
+    And user "participant1" sends message "Message 2" to room "room1" with 201
+    When user "participant2" sends reply "Message 3" on message "Message 1" to room "room1" with 201
+    And user "participant2" sends reply "Message 4" on message "Message 2" to room "room1" with 201
+    Then user "participant1" has the following notifications
+      | app    | object_type | object_id                        | subject                                                                                            |
+      | spreed | chat        | room1/Message 4                  | participant2-displayname replied to your message in conversation room1                              |
+      | spreed | chat        | room1/Message 3/Bảo trì hệ thống | participant2-displayname replied to your message in conversation room1 (in thread Bảo trì hệ thống) |
 
   Scenario: Post a message with an attachment (not replying)
     Given user "participant1" creates room "room1" (v4)

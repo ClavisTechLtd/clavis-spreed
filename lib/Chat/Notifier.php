@@ -18,6 +18,7 @@ use OCA\Talk\Room;
 use OCA\Talk\Service\ParticipantService;
 use OCA\Talk\Service\ThreadService;
 use OCA\Talk\Webinary;
+use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\Comments\IComment;
 use OCP\IConfig;
@@ -38,6 +39,15 @@ class Notifier {
 	public const PRIORITY_NONE = 0;
 	public const PRIORITY_NORMAL = 1;
 	public const PRIORITY_IMPORTANT = 2;
+
+	/**
+	 * Story 4.1: per-request memoisation of resolved Thread Titles, so posting a
+	 * message into a Thread costs at most one lookup no matter how many
+	 * notifications are created for it.
+	 *
+	 * @var array<int, ?string>
+	 */
+	protected array $threadNames = [];
 
 	public function __construct(
 		private readonly INotificationManager $notificationManager,
@@ -341,9 +351,24 @@ class Notifier {
 		}
 
 		if ($notificationLevel === Participant::NOTIFY_ALWAYS) {
+			// Story 4.1: `reaction` is one of the nine gated subjects, so it has to
+			// carry the thread id of the reacted-to message like the others do.
+			// A Thread's *root* message has `topmost_parent_id = 0` and names the
+			// Thread by its own id, hence the `?: getId()` fallback every other
+			// thread-id derivation uses ({@see ReactionManager::addReactionMessage()},
+			// {@see ChatManager::sendMessage()}); without it the most common
+			// reaction target of all would carry no Thread at all.
+			// The resolved id is validated before it is carried, like
+			// {@see ChatManager::sendMessage()} does, because it reaches the deep
+			// link and the composed notification object id.
+			$threadId = (int)$comment->getTopmostParentId() ?: (int)$comment->getId();
+			if (!$this->threadService->validateThread($chat->getId(), $threadId)) {
+				$threadId = 0;
+			}
+
 			$notification = $this->createNotification($chat, $comment, 'reaction', [
 				'reaction' => $reaction->getMessage(),
-			], $reaction);
+			], $reaction, threadId: $threadId);
 			$notification->setUser($comment->getActorId());
 			$this->notificationManager->notify($notification);
 		}
@@ -633,8 +658,24 @@ class Notifier {
 			'commentId' => $comment->getId(),
 		];
 
-		if ($threadId !== null && $threadId !== 0) {
+		// Only a positive id names a real Thread. `Thread::THREAD_CREATE` (-1) is a
+		// sentinel that {@see ChatManager::sendMessage()} keeps in `$threadId`
+		// through the notification dispatch when a message creates its own Thread,
+		// so a `!== 0` guard would leak `-1` into the message parameters, the deep
+		// link and the notification object id.
+		if ($threadId !== null && $threadId > 0) {
 			$messageData['threadId'] = $threadId;
+
+			// Story 4.1, AC1: the Thread Title is resolved once here, at emit time,
+			// and travels as message parameter data. The per-recipient render path
+			// in \OCA\Talk\Notification\Notifier::parseChatMessage() therefore never
+			// has to look a Thread up. It also freezes the title as it was when the
+			// activity happened, which is the correct reading for a point-in-time
+			// notification.
+			$threadName = $this->getThreadName($chat, $threadId);
+			if ($threadName !== null && $threadName !== '') {
+				$messageData['threadName'] = $threadName;
+			}
 		}
 
 		$notification = $this->notificationManager->createNotification();
@@ -646,6 +687,28 @@ class Notifier {
 			->setDateTime($reaction ? $reaction->getCreationDateTime() : $comment->getCreationDateTime());
 
 		return $notification;
+	}
+
+	/**
+	 * Resolves the title of the given Thread, memoised for the request.
+	 *
+	 * Returns null when the Thread can not be found anymore, in which case the
+	 * notification is still emitted, only without the title.
+	 *
+	 * @param non-negative-int $threadId
+	 */
+	protected function getThreadName(Room $chat, int $threadId): ?string {
+		if (array_key_exists($threadId, $this->threadNames)) {
+			return $this->threadNames[$threadId];
+		}
+
+		try {
+			$this->threadNames[$threadId] = $this->threadService->findByThreadId($chat->getId(), $threadId)->getName();
+		} catch (DoesNotExistException) {
+			$this->threadNames[$threadId] = null;
+		}
+
+		return $this->threadNames[$threadId];
 	}
 
 	protected function getDefaultGroupNotification(): int {

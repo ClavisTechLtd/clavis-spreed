@@ -14,10 +14,12 @@ use OCA\Talk\Exceptions\ParticipantNotFoundException;
 use OCA\Talk\Files\Util;
 use OCA\Talk\Model\Attendee;
 use OCA\Talk\Model\Session;
+use OCA\Talk\Model\Thread;
 use OCA\Talk\Participant;
 use OCA\Talk\Room;
 use OCA\Talk\Service\ParticipantService;
 use OCA\Talk\Service\ThreadService;
+use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\Comments\IComment;
 use OCP\IConfig;
@@ -403,6 +405,297 @@ class NotifierTest extends TestCase {
 
 		$notifier = $this->getNotifier([]);
 		$notifier->notifyReacted($room, $comment, $reaction);
+	}
+
+	/**
+	 * Returns an INotification mock whose `setMessage()` calls are recorded into
+	 * $capturedMessageData, so the message parameter data `createNotification()`
+	 * composes can be asserted.
+	 */
+	private function getCapturingNotification(?array &$capturedMessageData): INotification&MockObject {
+		$notification = $this->createMock(INotification::class);
+		$notification->method('setApp')->willReturnSelf();
+		$notification->method('setObject')->willReturnSelf();
+		$notification->method('setSubject')->willReturnSelf();
+		$notification->method('setDateTime')->willReturnSelf();
+		$notification->method('setUser')->willReturnSelf();
+		$notification->method('setPriorityNotification')->willReturnSelf();
+		$notification->method('setMessage')
+			->willReturnCallback(function (string $verb, array $data) use ($notification, &$capturedMessageData): INotification {
+				$capturedMessageData = $data;
+				return $notification;
+			});
+
+		return $notification;
+	}
+
+	/**
+	 * Story 4.1, AC1: the Thread Title is resolved once at emit time and stored
+	 * beside the existing `threadId`, so the per-recipient render path needs no
+	 * Thread lookup of its own.
+	 */
+	public function testCreateNotificationAddsThreadNameNextToThreadId(): void {
+		$capturedMessageData = null;
+		$this->notificationManager->method('createNotification')
+			->willReturn($this->getCapturingNotification($capturedMessageData));
+
+		$room = $this->createMock(Room::class);
+		$room->method('getId')->willReturn(1234);
+		$room->method('getToken')->willReturn('Token123');
+
+		$thread = $this->createMock(Thread::class);
+		$thread->method('getName')->willReturn('Thread 1');
+
+		$this->threadService->expects($this->once())
+			->method('findByThreadId')
+			->with(1234, 42)
+			->willReturn($thread);
+
+		$comment = $this->newComment('108', 'users', 'testUser', new \DateTime('@' . 1000000016), 'message');
+
+		self::invokePrivate($this->getNotifier(), 'createNotification', [$room, $comment, 'chat', [], null, 42]);
+
+		$this->assertSame([
+			'commentId' => '108',
+			'threadId' => 42,
+			'threadName' => 'Thread 1',
+		], $capturedMessageData);
+	}
+
+	/**
+	 * Story 4.1: posting into a Thread creates one notification per recipient,
+	 * so the title lookup is memoised for the request.
+	 */
+	public function testCreateNotificationResolvesTheThreadTitleOnlyOnce(): void {
+		$capturedMessageData = null;
+		$this->notificationManager->method('createNotification')
+			->willReturn($this->getCapturingNotification($capturedMessageData));
+
+		$room = $this->createMock(Room::class);
+		$room->method('getId')->willReturn(1234);
+		$room->method('getToken')->willReturn('Token123');
+
+		$thread = $this->createMock(Thread::class);
+		$thread->method('getName')->willReturn('Thread 1');
+
+		$this->threadService->expects($this->once())
+			->method('findByThreadId')
+			->with(1234, 42)
+			->willReturn($thread);
+
+		$comment = $this->newComment('108', 'users', 'testUser', new \DateTime('@' . 1000000016), 'message');
+
+		$notifier = $this->getNotifier();
+		self::invokePrivate($notifier, 'createNotification', [$room, $comment, 'chat', [], null, 42]);
+		self::invokePrivate($notifier, 'createNotification', [$room, $comment, 'reply', [], null, 42]);
+
+		$this->assertSame('Thread 1', $capturedMessageData['threadName']);
+	}
+
+	/**
+	 * Story 4.1, edge case "Thread row gone at emit time": the notification is
+	 * still emitted, only without the title.
+	 */
+	public function testCreateNotificationOmitsThreadNameWhenTheThreadIsGone(): void {
+		$capturedMessageData = null;
+		$this->notificationManager->method('createNotification')
+			->willReturn($this->getCapturingNotification($capturedMessageData));
+
+		$room = $this->createMock(Room::class);
+		$room->method('getId')->willReturn(1234);
+		$room->method('getToken')->willReturn('Token123');
+
+		$this->threadService->expects($this->once())
+			->method('findByThreadId')
+			->with(1234, 42)
+			->willThrowException(new DoesNotExistException('No thread found'));
+
+		$comment = $this->newComment('108', 'users', 'testUser', new \DateTime('@' . 1000000016), 'message');
+
+		self::invokePrivate($this->getNotifier(), 'createNotification', [$room, $comment, 'chat', [], null, 42]);
+
+		$this->assertSame([
+			'commentId' => '108',
+			'threadId' => 42,
+		], $capturedMessageData);
+		$this->assertArrayNotHasKey('threadName', $capturedMessageData);
+	}
+
+	/**
+	 * Story 4.1: `Thread::THREAD_CREATE` (-1) is a sentinel that survives the
+	 * notification dispatch when a message creates its own Thread, so it must
+	 * never reach the message parameters, the deep link or the object id.
+	 */
+	public function testCreateNotificationIgnoresTheThreadCreateSentinel(): void {
+		$capturedMessageData = null;
+		$this->notificationManager->method('createNotification')
+			->willReturn($this->getCapturingNotification($capturedMessageData));
+
+		$room = $this->createMock(Room::class);
+		$room->method('getToken')->willReturn('Token123');
+
+		$this->threadService->expects($this->never())
+			->method('findByThreadId');
+
+		$comment = $this->newComment('108', 'users', 'testUser', new \DateTime('@' . 1000000016), 'message');
+
+		self::invokePrivate($this->getNotifier(), 'createNotification', [$room, $comment, 'chat', [], null, Thread::THREAD_CREATE]);
+
+		$this->assertSame(['commentId' => '108'], $capturedMessageData);
+		$this->assertArrayNotHasKey('threadId', $capturedMessageData);
+	}
+
+	/**
+	 * Story 4.1: activity outside any Thread gains neither key.
+	 */
+	public function testCreateNotificationWithoutThreadIsUnchanged(): void {
+		$capturedMessageData = null;
+		$this->notificationManager->method('createNotification')
+			->willReturn($this->getCapturingNotification($capturedMessageData));
+
+		$room = $this->createMock(Room::class);
+		$room->method('getToken')->willReturn('Token123');
+
+		$this->threadService->expects($this->never())
+			->method('findByThreadId');
+
+		$comment = $this->newComment('108', 'users', 'testUser', new \DateTime('@' . 1000000016), 'message');
+
+		self::invokePrivate($this->getNotifier(), 'createNotification', [$room, $comment, 'chat']);
+
+		$this->assertSame(['commentId' => '108'], $capturedMessageData);
+	}
+
+	/**
+	 * Story 4.1: `reaction` is one of the nine gated subjects, so it has to carry
+	 * the thread id of the reacted-to message - it did not before.
+	 */
+	public function testNotifyReactedCarriesTheThreadOfTheReactedToMessage(): void {
+		$capturedMessageData = null;
+		$this->notificationManager->method('createNotification')
+			->willReturn($this->getCapturingNotification($capturedMessageData));
+
+		$room = $this->getRoom([
+			'attendee' => [
+				'testUser' => [
+					'notificationLevel' => Participant::NOTIFY_ALWAYS,
+				],
+			],
+		]);
+		$room->method('getType')
+			->willReturn(Room::TYPE_GROUP);
+		$room->method('getId')
+			->willReturn(1234);
+
+		$thread = $this->createMock(Thread::class);
+		$thread->method('getName')->willReturn('Thread 1');
+
+		$this->threadService->expects($this->once())
+			->method('validateThread')
+			->with(1234, 42)
+			->willReturn(true);
+		$this->threadService->expects($this->once())
+			->method('findByThreadId')
+			->with(1234, 42)
+			->willReturn($thread);
+
+		$comment = $this->newComment('108', 'users', 'testUser', new \DateTime('@' . 1000000016), 'message');
+		$comment->setTopmostParentId('42');
+		$reaction = $this->newComment('109', 'users', 'testUser2', new \DateTime('@' . 1000000016), '👍');
+
+		$this->getNotifier()->notifyReacted($room, $comment, $reaction);
+
+		$this->assertSame([
+			'commentId' => '108',
+			'threadId' => 42,
+			'threadName' => 'Thread 1',
+		], $capturedMessageData);
+	}
+
+	/**
+	 * Story 4.1: a Thread's *root* message has `topmost_parent_id = 0` and names
+	 * the Thread by its own id - and it is the most common reaction target of
+	 * all. Without the `?: getId()` fallback it would carry no Thread.
+	 */
+	public function testNotifyReactedOnAThreadRootCarriesTheThread(): void {
+		$capturedMessageData = null;
+		$this->notificationManager->method('createNotification')
+			->willReturn($this->getCapturingNotification($capturedMessageData));
+
+		$room = $this->getRoom([
+			'attendee' => [
+				'testUser' => [
+					'notificationLevel' => Participant::NOTIFY_ALWAYS,
+				],
+			],
+		]);
+		$room->method('getType')
+			->willReturn(Room::TYPE_GROUP);
+		$room->method('getId')
+			->willReturn(1234);
+
+		$thread = $this->createMock(Thread::class);
+		$thread->method('getName')->willReturn('Thread 1');
+
+		$this->threadService->expects($this->once())
+			->method('validateThread')
+			->with(1234, 108)
+			->willReturn(true);
+		$this->threadService->expects($this->once())
+			->method('findByThreadId')
+			->with(1234, 108)
+			->willReturn($thread);
+
+		// A root message: `topmost_parent_id` stays at its default of 0.
+		$comment = $this->newComment('108', 'users', 'testUser', new \DateTime('@' . 1000000016), 'message');
+		$reaction = $this->newComment('109', 'users', 'testUser2', new \DateTime('@' . 1000000016), '👍');
+
+		$this->getNotifier()->notifyReacted($room, $comment, $reaction);
+
+		$this->assertSame([
+			'commentId' => '108',
+			'threadId' => 108,
+			'threadName' => 'Thread 1',
+		], $capturedMessageData);
+	}
+
+	/**
+	 * Story 4.1: the derived id is validated before it is carried, because it
+	 * reaches the deep link and the composed notification object id. A plain
+	 * reply chain that is not a Thread must therefore carry no thread id.
+	 */
+	public function testNotifyReactedCarriesNoThreadIdWhenValidationFails(): void {
+		$capturedMessageData = null;
+		$this->notificationManager->method('createNotification')
+			->willReturn($this->getCapturingNotification($capturedMessageData));
+
+		$room = $this->getRoom([
+			'attendee' => [
+				'testUser' => [
+					'notificationLevel' => Participant::NOTIFY_ALWAYS,
+				],
+			],
+		]);
+		$room->method('getType')
+			->willReturn(Room::TYPE_GROUP);
+		$room->method('getId')
+			->willReturn(1234);
+
+		$this->threadService->expects($this->once())
+			->method('validateThread')
+			->with(1234, 42)
+			->willReturn(false);
+		$this->threadService->expects($this->never())
+			->method('findByThreadId');
+
+		$comment = $this->newComment('108', 'users', 'testUser', new \DateTime('@' . 1000000016), 'message');
+		$comment->setTopmostParentId('42');
+		$reaction = $this->newComment('109', 'users', 'testUser2', new \DateTime('@' . 1000000016), '👍');
+
+		$this->getNotifier()->notifyReacted($room, $comment, $reaction);
+
+		$this->assertSame(['commentId' => '108'], $capturedMessageData);
+		$this->assertArrayNotHasKey('threadId', $capturedMessageData);
 	}
 
 	public static function dataGetMentionedUsers(): array {

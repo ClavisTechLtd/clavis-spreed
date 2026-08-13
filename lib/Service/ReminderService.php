@@ -27,6 +27,7 @@ class ReminderService {
 		private readonly ChatManager $chatManager,
 		private readonly ProxyCacheMessageService $pcmService,
 		private readonly Manager $manager,
+		private readonly ThreadService $threadService,
 		private readonly LoggerInterface $logger,
 	) {
 	}
@@ -155,6 +156,30 @@ class ReminderService {
 					|| $room->getId() !== (int)$message->getObjectId())) {
 				$this->logger->warning('Ignoring reminder for user ' . $reminder->getUserId() . ' as messages #' . $reminder->getMessageId() . ' could not be found for conversation ' . $reminder->getToken());
 				continue;
+			}
+
+			// Story 4.1: `reminder` is one of the nine gated subjects, but it is
+			// created outside \OCA\Talk\Chat\Notifier, so the thread id and the
+			// Thread Title have to be added here. Federated reminders are excluded:
+			// AD-18 proxies no new Thread field.
+			// A Thread's root message has `topmost_parent_id = 0` and names the
+			// Thread by its own id, hence the `?: getId()` fallback every other
+			// thread-id derivation uses. A single lookup then decides *both* keys:
+			// a reply chain that has no `talk_threads` row is not a Thread, and
+			// must not contribute a `threadId` either, because that id reaches the
+			// deep link and the notification object id.
+			if ($message instanceof IComment) {
+				$threadId = (int)$message->getTopmostParentId() ?: (int)$message->getId();
+				if ($threadId !== 0) {
+					try {
+						$thread = $this->threadService->findByThreadId($room->getId(), $threadId);
+						$messageParameters['threadId'] = $threadId;
+						$messageParameters['threadName'] = $thread->getName();
+					} catch (DoesNotExistException) {
+						// Not a Thread - or the Thread is gone: the reminder is still
+						// worth sending, only without any Thread context.
+					}
+				}
 			}
 
 			$notification = $this->notificationManager->createNotification();
