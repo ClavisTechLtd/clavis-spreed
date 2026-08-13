@@ -69,6 +69,14 @@ class Notifier implements INotifier {
 	 */
 	public const THREAD_NAME_MAX_LENGTH = 64;
 
+	/**
+	 * Story 4.2: a lock reason may be up to
+	 * {@see \OCA\Talk\Model\Thread::LOCK_REASON_MAX_LENGTH} characters, which is
+	 * unusable in a notification subject. Like the Thread Title bound above this
+	 * is a readability bound in characters, not a byte budget.
+	 */
+	public const THREAD_LOCK_REASON_MAX_LENGTH = 128;
+
 	/** @var Room[] */
 	protected array $rooms = [];
 	/** @var Participant[][] */
@@ -286,6 +294,19 @@ class Notifier implements INotifier {
 				return $this->parsePasswordRequest($notification, $room, $l);
 			}
 			return $this->parseCall($notification, $room, $l);
+		}
+		// Story 4.2: the four Thread lifecycle subjects branch off before the
+		// nine-subject gate below. They carry no comment at all, so they must
+		// never reach parseChatMessage().
+		if ($subject === 'thread_locked' || $subject === 'thread_closed' || $subject === 'thread_unlocked' || $subject === 'thread_reopened') {
+			if ($participant instanceof Participant
+				&& $room->getLobbyState() !== Webinary::LOBBY_NONE
+				&& !($participant->getPermissions() & Attendee::PERMISSIONS_LOBBY_IGNORE)) {
+				// User is blocked by the lobby, remove notification
+				throw new AlreadyProcessedException();
+			}
+
+			return $this->parseThreadStateChange($notification, $room, $participant, $l);
 		}
 		if ($subject === 'reply' || $subject === 'mention' || $subject === 'mention_direct' || $subject === 'mention_group' || $subject === 'mention_team' || $subject === 'mention_all' || $subject === 'chat' || $subject === 'reaction' || $subject === 'reminder') {
 			if ($participant instanceof Participant
@@ -965,34 +986,28 @@ class Notifier implements INotifier {
 		// therefore render exactly as they did.
 		if (!$participant->getAttendee()->isSensitive()
 			&& isset($messageParameters['threadId'], $messageParameters['threadName'])
-			&& is_string($messageParameters['threadName'])
-			&& trim($messageParameters['threadName']) !== '') {
+			&& is_string($messageParameters['threadName'])) {
 			// A Thread Title is user-authored and only trimmed on input (creation
-			// does not even trim), so it can contain line breaks. The push subject
-			// shape is "{header}\n{message}" and push clients split on "\n" to form
-			// the notification title and body, so an embedded line break would let
-			// the title's author forge a body of their choosing on a lock screen.
-			// Every C0 control character is therefore collapsed to a single space
-			// *before* the title is bounded. The character class is ASCII-only and
-			// intentionally used without the `u` modifier: no byte in [\x00-\x1F]
-			// or \x7F can occur inside a multi-byte UTF-8 sequence, so this is
-			// byte-safe and - unlike a `/u` pattern - cannot return null on
-			// malformed input.
-			$threadName = preg_replace('/[\x00-\x1F\x7F]+/', ' ', $messageParameters['threadName']);
-			if (mb_strlen($threadName) > self::THREAD_NAME_MAX_LENGTH) {
-				$threadName = mb_substr($threadName, 0, self::THREAD_NAME_MAX_LENGTH) . '…';
+			// does not even trim), so it can contain line breaks and other
+			// presentation-altering characters. Sanitising and bounding it is
+			// {@see self::shortenThreadText()}, shared with the Thread lifecycle
+			// subjects of Story 4.2 so there is exactly one implementation of that
+			// rule. A title that is empty once sanitised renders no thread fragment
+			// at all - "(in thread    )" says nothing.
+			$threadName = $this->shortenThreadText($messageParameters['threadName'], self::THREAD_NAME_MAX_LENGTH);
+
+			if ($threadName !== '') {
+				$richSubjectParameters['thread'] = [
+					'type' => 'highlight',
+					'id' => 'thread/' . (string)$messageParameters['threadId'],
+					'name' => $threadName,
+				];
+
+				$lines = explode("\n", $subject, 2);
+				// TRANSLATORS {thread} is the user-authored title of the thread the activity happened in
+				$lines[0] .= ' ' . $l->t('(in thread {thread})');
+				$subject = implode("\n", $lines);
 			}
-
-			$richSubjectParameters['thread'] = [
-				'type' => 'highlight',
-				'id' => 'thread/' . (string)$messageParameters['threadId'],
-				'name' => $threadName,
-			];
-
-			$lines = explode("\n", $subject, 2);
-			// TRANSLATORS {thread} is the user-authored title of the thread the activity happened in
-			$lines[0] .= ' ' . $l->t('(in thread {thread})');
-			$subject = implode("\n", $lines);
 		}
 
 		// `strtr()` rather than `str_replace()` with array arguments: the latter
@@ -1009,6 +1024,306 @@ class Notifier implements INotifier {
 			->setRichSubject($subject, $richSubjectParameters);
 
 		return $notification;
+	}
+
+	/**
+	 * Story 4.2: a Thread lifecycle transition - locked, closed, unlocked or
+	 * reopened - as seen by a follower of that Thread.
+	 *
+	 * Everything this notification says arrives in the subject parameters that
+	 * {@see \OCA\Talk\Chat\Notifier::notifyThreadStateChange()} copied from the
+	 * system message's own parameter array (AD-14), so nothing is looked up and
+	 * no rendered message text is re-parsed here.
+	 *
+	 * @throws AlreadyProcessedException
+	 */
+	protected function parseThreadStateChange(INotification $notification, Room $room, Participant $participant, IL10N $l): INotification {
+		if ($notification->getObjectType() !== 'room') {
+			// A notification that can never be rendered has to be marked processed
+			// first, exactly as the unknown-subject fallthrough of self::prepare()
+			// does - otherwise it is re-thrown and logged on every single fetch and
+			// the user has no way to dismiss it.
+			$this->notificationManager->markProcessed($notification);
+			throw new AlreadyProcessedException();
+		}
+
+		$parameters = $notification->getSubjectParameters();
+		$threadId = (int)($parameters['thread'] ?? 0);
+		if ($threadId <= 0) {
+			// AD-12: a position is either present with a real value or absent
+			// entirely - 0 is never a valid thread id.
+			$this->notificationManager->markProcessed($notification);
+			throw new AlreadyProcessedException();
+		}
+
+		// AD-20: routing identifiers are explicitly not content - they name a
+		// destination without disclosing what is in it - so the deep link keeps
+		// the Thread even for a sensitive conversation.
+		$notification->setLink($this->url->linkToRouteAbsolute('spreed.Page.showCall', [
+			'token' => $room->getToken(),
+			'threadId' => $threadId,
+		]));
+		$notification = $this->addActionButton($notification, 'chat_view', $l->t('View chat'), false);
+
+		$verb = $notification->getSubject();
+
+		if ($participant->getAttendee()->isSensitive()) {
+			// AD-20: the Thread Title and the lock reason are user-authored content
+			// of message grade, so they are withheld exactly where the shipped
+			// sensitive-conversation setting already withholds the message preview
+			// - and they are withheld together, as one decision.
+			if ($this->notificationManager->isPreparingPushNotification()) {
+				$translatedPrivateConversation = $l->t('Private conversation');
+
+				if ($verb === 'thread_locked') {
+					// TRANSLATORS A thread was locked in a private conversation
+					$subject = $translatedPrivateConversation . "\n" . $l->t('A thread was locked');
+				} elseif ($verb === 'thread_closed') {
+					// TRANSLATORS A thread was closed in a private conversation
+					$subject = $translatedPrivateConversation . "\n" . $l->t('A thread was closed');
+				} elseif ($verb === 'thread_unlocked') {
+					// TRANSLATORS A thread was unlocked in a private conversation
+					$subject = $translatedPrivateConversation . "\n" . $l->t('A thread was unlocked');
+				} else {
+					// TRANSLATORS A thread was reopened in a private conversation
+					$subject = $translatedPrivateConversation . "\n" . $l->t('A thread was reopened');
+				}
+			} else {
+				if ($verb === 'thread_locked') {
+					$subject = $l->t('A thread was locked in a private conversation');
+				} elseif ($verb === 'thread_closed') {
+					$subject = $l->t('A thread was closed in a private conversation');
+				} elseif ($verb === 'thread_unlocked') {
+					$subject = $l->t('A thread was unlocked in a private conversation');
+				} else {
+					$subject = $l->t('A thread was reopened in a private conversation');
+				}
+			}
+
+			$notification->setParsedSubject($subject)
+				->setRichSubject($subject, []);
+
+			return $notification;
+		}
+
+		// Mirrors {@see \OCA\Talk\Chat\Parser\SystemMessage} - a Thread that never
+		// got a title is named by its id. Compared against '' rather than tested
+		// for truthiness, because the string "0" is a legitimate Thread Title and
+		// is falsy in PHP.
+		$threadName = $this->shortenThreadText((string)($parameters['title'] ?? ''), self::THREAD_NAME_MAX_LENGTH);
+		if ($threadName === '') {
+			$threadName = (string)$threadId;
+		}
+
+		$richSubjectParameters = [];
+		$actorParameter = $this->getThreadActorParameter($parameters);
+		if ($actorParameter !== null) {
+			$richSubjectParameters['user'] = $actorParameter;
+		}
+		$richSubjectParameters['thread'] = [
+			'type' => 'highlight',
+			'id' => 'thread/' . $threadId,
+			'name' => $threadName,
+		];
+		$richSubjectParameters['call'] = [
+			'type' => 'call',
+			'id' => (string)$room->getId(),
+			'name' => $room->getDisplayName($notification->getUser()),
+			'call-type' => $this->getRoomType($room),
+			'icon-url' => $this->avatarService->getAvatarUrl($room),
+		];
+
+		// Two templates rather than one with an optional tail, mirroring
+		// {@see \OCA\Talk\Chat\Parser\SystemMessage}: the reason is user content
+		// and is a rich object, never interpolated into the translatable string.
+		$reason = '';
+		if ($verb === 'thread_locked') {
+			$reason = $this->shortenThreadText((string)($parameters['reason'] ?? ''), self::THREAD_LOCK_REASON_MAX_LENGTH);
+			if ($reason !== '') {
+				$richSubjectParameters['reason'] = [
+					'type' => 'highlight',
+					'id' => 'thread-lock-reason',
+					'name' => $reason,
+				];
+			}
+		}
+
+		if ($this->notificationManager->isPreparingPushNotification()) {
+			// The push subject convention throughout this file is "{header}\n{body}",
+			// which iOS splits into the notification title and body. A single long
+			// line would give an ordinary conversation an over-long title and an
+			// empty body, while the sensitive branch above is already well-formed.
+			// Line 1 therefore carries the actor and the conversation, exactly as
+			// {@see self::parseChatMessage()} does, and line 2 the thread action.
+			if ($actorParameter !== null) {
+				$header = $l->t('{user} in {call}');
+			} else {
+				$header = $l->t('Deleted user in {call}');
+			}
+
+			if ($verb === 'thread_locked' && $reason !== '') {
+				$body = $l->t('Locked thread {thread} ({reason})');
+			} elseif ($verb === 'thread_locked') {
+				$body = $l->t('Locked thread {thread}');
+			} elseif ($verb === 'thread_closed') {
+				$body = $l->t('Closed thread {thread}');
+			} elseif ($verb === 'thread_unlocked') {
+				$body = $l->t('Unlocked thread {thread}');
+			} else {
+				$body = $l->t('Reopened thread {thread}');
+			}
+
+			$subject = $header . "\n" . $body;
+		} elseif ($actorParameter !== null) {
+			if ($verb === 'thread_locked' && $reason !== '') {
+				$subject = $l->t('{user} locked thread {thread} in conversation {call} ({reason})');
+			} elseif ($verb === 'thread_locked') {
+				$subject = $l->t('{user} locked thread {thread} in conversation {call}');
+			} elseif ($verb === 'thread_closed') {
+				$subject = $l->t('{user} closed thread {thread} in conversation {call}');
+			} elseif ($verb === 'thread_unlocked') {
+				$subject = $l->t('{user} unlocked thread {thread} in conversation {call}');
+			} else {
+				$subject = $l->t('{user} reopened thread {thread} in conversation {call}');
+			}
+		} else {
+			// The account is gone and no display name was frozen at emit time. The
+			// established wording of this file names no uid in that case.
+			if ($verb === 'thread_locked' && $reason !== '') {
+				$subject = $l->t('A deleted user locked thread {thread} in conversation {call} ({reason})');
+			} elseif ($verb === 'thread_locked') {
+				$subject = $l->t('A deleted user locked thread {thread} in conversation {call}');
+			} elseif ($verb === 'thread_closed') {
+				$subject = $l->t('A deleted user closed thread {thread} in conversation {call}');
+			} elseif ($verb === 'thread_unlocked') {
+				$subject = $l->t('A deleted user unlocked thread {thread} in conversation {call}');
+			} else {
+				$subject = $l->t('A deleted user reopened thread {thread} in conversation {call}');
+			}
+		}
+
+		// `strtr()` rather than `str_replace()` with array arguments, for the same
+		// reason {@see self::parseChatMessage()} uses it: a Thread Title or lock
+		// reason containing the literal text "{call}" must not be rescanned.
+		$placeholderMap = [];
+		foreach ($richSubjectParameters as $placeholder => $parameter) {
+			$placeholderMap['{' . $placeholder . '}'] = $parameter['name'];
+		}
+
+		$notification->setParsedSubject(strtr($subject, $placeholderMap))
+			->setRichSubject($subject, $richSubjectParameters);
+
+		return $notification;
+	}
+
+	/**
+	 * Story 4.2: the actor of a Thread lifecycle transition. A Thread Manager is
+	 * the root-message author or a moderator, and a moderator need not hold a user
+	 * account, so the display name frozen at emit time is the fallback whenever the
+	 * actor cannot be resolved as a user anymore.
+	 *
+	 * Returns null when the actor cannot be named at all - a local account that no
+	 * longer resolves and no frozen display name. The caller then picks a
+	 * "A deleted user ..." template, which is what the rest of this file does
+	 * instead of putting a bare account id in front of a user.
+	 *
+	 * @param array $parameters Subject parameters of the notification
+	 * @return array{type: string, id: string, name: string, server?: string}|null
+	 */
+	protected function getThreadActorParameter(array $parameters): ?array {
+		$actorType = (string)($parameters['userType'] ?? Attendee::ACTOR_USERS);
+		$actorId = (string)($parameters['userId'] ?? '');
+		$fallbackName = (string)($parameters['userDisplayName'] ?? '');
+
+		if ($actorType === Attendee::ACTOR_USERS) {
+			$displayName = $this->userManager->getDisplayName($actorId);
+			if ($displayName !== null) {
+				return [
+					'type' => 'user',
+					'id' => $actorId,
+					'name' => $displayName,
+				];
+			}
+		} elseif ($actorType === Attendee::ACTOR_FEDERATED_USERS) {
+			// A federated participant can be a moderator and therefore a Thread
+			// Manager. Rendered as a `user` rich object with its remote, the way
+			// {@see self::parseChatMessage()} renders federated actors, so clients
+			// show a real user chip rather than a raw cloud id.
+			try {
+				$cloudId = $this->cloudIdManager->resolveCloudId($actorId);
+				return [
+					'type' => 'user',
+					'id' => $cloudId->getUser(),
+					'name' => $fallbackName !== '' ? $fallbackName : $cloudId->getDisplayId(),
+					'server' => $cloudId->getRemote(),
+				];
+			} catch (\InvalidArgumentException) {
+				// Not a resolvable cloud id, fall through to the highlight below
+			}
+		}
+
+		if ($fallbackName === '') {
+			if ($actorType === Attendee::ACTOR_USERS || $actorId === '') {
+				// The account is gone and nothing was frozen at emit time
+				return null;
+			}
+
+			// A non-user actor (guest, bot, ...) still has a meaningful id
+			return [
+				'type' => 'highlight',
+				'id' => $actorId,
+				'name' => $actorId,
+			];
+		}
+
+		return [
+			'type' => 'highlight',
+			'id' => $actorId,
+			'name' => $fallbackName,
+		];
+	}
+
+	/**
+	 * Sanitises and bounds a piece of user-authored Thread text for use in a
+	 * notification subject. The single implementation for both the Thread Title
+	 * of Story 4.1 ({@see self::parseChatMessage()}) and the Thread Title and
+	 * lock reason of Story 4.2 ({@see self::parseThreadStateChange()}).
+	 *
+	 * The push subject shape is "{header}\n{message}" and push clients split on
+	 * "\n" to form the notification title and body, so an embedded line break
+	 * would let the author of a title - or of a lock reason, which may be up to
+	 * {@see \OCA\Talk\Model\Thread::LOCK_REASON_MAX_LENGTH} characters long -
+	 * forge a body of their choosing on a lock screen. Bidirectional overrides
+	 * are the same class of attack against a single line: they reverse the
+	 * rendering of everything that follows them in the subject.
+	 *
+	 * Collapsed to a single space, therefore:
+	 * - every C0 control character and DEL, `[\x00-\x1F\x7F]`;
+	 * - U+0085 NEL (`\xC2\x85`), U+2028 LINE SEPARATOR and U+2029 PARAGRAPH
+	 *   SEPARATOR (`\xE2\x80\xA8`, `\xE2\x80\xA9`), all line-break equivalents in
+	 *   common renderers;
+	 * - the bidi overrides and embeddings U+202A-U+202E (`\xE2\x80\xAA-\xAE`,
+	 *   contiguous with the two separators above) and the bidi isolates
+	 *   U+2066-U+2069 (`\xE2\x81\xA6-\xA9`).
+	 *
+	 * The pattern is written byte-wise and deliberately carries no `u` modifier:
+	 * a `/u` pattern returns null on malformed UTF-8, which would silently turn
+	 * the whole text into an empty string. UTF-8 is self-synchronising - `\xC2`,
+	 * `\xE2` are lead bytes and can never occur as continuation bytes - so
+	 * matching these sequences byte-wise cannot cut into an unrelated character.
+	 * Bounding afterwards is on character boundaries, never mid-character.
+	 */
+	protected function shortenThreadText(string $text, int $maxLength): string {
+		$text = trim((string)preg_replace('/(?:[\x00-\x1F\x7F]|\xC2\x85|\xE2\x80[\xA8-\xAE]|\xE2\x81[\xA6-\xA9])+/', ' ', $text));
+		if ($text === '') {
+			return '';
+		}
+
+		if (mb_strlen($text) > $maxLength) {
+			$text = mb_substr($text, 0, $maxLength) . '…';
+		}
+
+		return $text;
 	}
 
 	/**

@@ -10,6 +10,7 @@ namespace OCA\Talk\Controller;
 
 use OCA\Talk\Chat\ChatManager;
 use OCA\Talk\Chat\MessageParser;
+use OCA\Talk\Chat\Notifier;
 use OCA\Talk\Exceptions\ThreadProperty\AuthorityException;
 use OCA\Talk\Exceptions\ThreadProperty\StateException;
 use OCA\Talk\Manager;
@@ -47,6 +48,7 @@ class ThreadController extends AEnvironmentAwareOCSController {
 		IRequest $request,
 		private readonly Manager $manager,
 		private readonly ChatManager $chatManager,
+		private readonly Notifier $chatNotifier,
 		private readonly Preloader $sharePreloader,
 		private readonly MessageParser $messageParser,
 		private readonly ParticipantService $participantService,
@@ -359,6 +361,20 @@ class ThreadController extends AEnvironmentAwareOCSController {
 				true,
 				true,
 				$threadId,
+			);
+
+			// Story 4.2, AC1: the Thread's followers are told about the transition
+			// here, inside the guard that emits the system message and with the
+			// very same $parameters array (AD-14) - so the lock reason is read
+			// from parameter data and the revival-by-reply path through
+			// ThreadService::reviveIfClosed(), which emits no system message,
+			// stays silent without needing a condition of its own.
+			$this->chatNotifier->notifyThreadStateChange(
+				$this->room,
+				$this->participant,
+				$threadId,
+				$verb,
+				$parameters,
 			);
 		}
 

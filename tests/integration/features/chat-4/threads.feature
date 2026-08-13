@@ -581,3 +581,126 @@ Feature: chat-4/threads
     And force run "OCA\Talk\BackgroundJob\ExpireChatMessages" background jobs
     And force run "OCA\Talk\BackgroundJob\ReapOrphanedThreads" background jobs
     Then user "participant1" sees the following recent threads in room "room" with 200
+
+  # Story 4.2: locking, closing or reopening a Thread notifies the participants
+  # that follow it, so nobody has to learn a Thread is shut by writing a reply
+  # and having it refused. The notification lives under the `room` object type
+  # with the bare room token as object id (AD-12) - never `chat`, which
+  # markMentionNotificationsRead() would erase, and never a new object type,
+  # which the shipped Android and iOS clients would drop unhandled. The
+  # invitation notification of the group conversation shares that object type and
+  # object id, so the rows below are told apart by their subject.
+
+  Scenario: Locking a Thread with a reason notifies its followers (Story 4.2, AC1)
+    Given user "participant1" creates room "room" (v4)
+      | roomType | 2 |
+      | roomName | room |
+    And user "participant1" adds user "participant2" to room "room" with 200 (v4)
+    And user "participant1" sends thread "Thread 1" with message "Message 1" to room "room" with 201
+    And user "participant2" subscribes to thread "Message 1" in room "room" with notification level 1 with 200
+      | t.id      | t.title  | t.numReplies | t.lastMessage | a.notificationLevel | firstMessage | lastMessage |
+      | Message 1 | Thread 1 | 0            | 0             | 1                   | Message 1    | NULL        |
+    When user "participant1" sets thread "Thread 1" state to 2 in room "room" with 200
+      | reason | Off topic |
+    Then user "participant2" has the following notifications
+      | app    | object_type | object_id | subject                                                                          |
+      | spreed | room        | room      | participant1-displayname locked thread Thread 1 in conversation room (Off topic) |
+      | spreed | room        | room      | participant1-displayname invited you to a group conversation: room               |
+    # The Thread Manager is never notified of their own action
+    And user "participant1" has the following notifications
+      | app | object_type | object_id | subject |
+
+  Scenario: Closing and reopening a Thread notifies its followers on the same terms (Story 4.2, AC1)
+    Given user "participant1" creates room "room" (v4)
+      | roomType | 2 |
+      | roomName | room |
+    And user "participant1" adds user "participant2" to room "room" with 200 (v4)
+    And user "participant1" sends thread "Thread 1" with message "Message 1" to room "room" with 201
+    And user "participant2" subscribes to thread "Message 1" in room "room" with notification level 1 with 200
+    When user "participant1" sets thread "Thread 1" state to 1 in room "room" with 200
+    Then user "participant2" has the following notifications
+      | app    | object_type | object_id | subject                                                              |
+      | spreed | room        | room      | participant1-displayname closed thread Thread 1 in conversation room |
+      | spreed | room        | room      | participant1-displayname invited you to a group conversation: room   |
+    # A requested state equal to the current state emits neither a system message
+    # nor a notification (Story 4.2, AC8)
+    When user "participant1" sets thread "Thread 1" state to 1 in room "room" with 200
+    Then user "participant2" has the following notifications
+      | app    | object_type | object_id | subject                                                              |
+      | spreed | room        | room      | participant1-displayname closed thread Thread 1 in conversation room |
+      | spreed | room        | room      | participant1-displayname invited you to a group conversation: room   |
+    When user "participant1" sets thread "Thread 1" state to 0 in room "room" with 200
+    Then user "participant2" has the following notifications
+      | app    | object_type | object_id | subject                                                                |
+      | spreed | room        | room      | participant1-displayname reopened thread Thread 1 in conversation room |
+      | spreed | room        | room      | participant1-displayname closed thread Thread 1 in conversation room   |
+      | spreed | room        | room      | participant1-displayname invited you to a group conversation: room     |
+
+  Scenario: A muted follower and a non-follower are not notified (Story 4.2, AC3, AC4)
+    Given user "participant3" exists
+    And user "participant1" creates room "room" (v4)
+      | roomType | 2 |
+      | roomName | room |
+    And user "participant1" adds user "participant2" to room "room" with 200 (v4)
+    And user "participant1" adds user "participant3" to room "room" with 200 (v4)
+    And user "participant1" sends thread "Thread 1" with message "Message 1" to room "room" with 201
+    # participant2 muted the Thread, participant3 has no thread attendee row at all
+    And user "participant2" subscribes to thread "Message 1" in room "room" with notification level 3 with 200
+    When user "participant1" sets thread "Thread 1" state to 2 in room "room" with 200
+    # Only the invitation of the group conversation, no lifecycle notification
+    Then user "participant2" has the following notifications
+      | app    | object_type | object_id | subject                                                            |
+      | spreed | room        | room      | participant1-displayname invited you to a group conversation: room |
+    And user "participant3" has the following notifications
+      | app    | object_type | object_id | subject                                                            |
+      | spreed | room        | room      | participant1-displayname invited you to a group conversation: room |
+
+  Scenario: A Closed Thread revived by a reply produces only the ordinary reply notification (Story 4.2, AC6)
+    Given user "participant1" creates room "room" (v4)
+      | roomType | 2 |
+      | roomName | room |
+    And user "participant1" adds user "participant2" to room "room" with 200 (v4)
+    And user "participant1" sends thread "Thread 1" with message "Message 1" to room "room" with 201
+    And user "participant2" subscribes to thread "Message 1" in room "room" with notification level 1 with 200
+    And user "participant1" sets thread "Thread 1" state to 1 in room "room" with 200
+    And user "participant2" has the following notifications
+      | app    | object_type | object_id | subject                                                              |
+      | spreed | room        | room      | participant1-displayname closed thread Thread 1 in conversation room |
+      | spreed | room        | room      | participant1-displayname invited you to a group conversation: room   |
+    # ThreadService::reviveIfClosed() emits no system message, so it emits no
+    # state-change notification either
+    When user "participant2" sends reply "Message 1-1" on message "Message 1" to room "room" with 201
+    Then user "participant2" has the following notifications
+      | app    | object_type | object_id | subject                                                              |
+      | spreed | room        | room      | participant1-displayname closed thread Thread 1 in conversation room |
+      | spreed | room        | room      | participant1-displayname invited you to a group conversation: room   |
+    And user "participant1" has the following notifications
+      | app    | object_type | object_id                 | subject                                                                                    |
+      | spreed | chat        | room/Message 1-1/Thread 1 | participant2-displayname replied to your message in conversation room (in thread Thread 1) |
+
+  # This is the scenario the object type decision rests on: `chat` was rejected
+  # because Chat\Notifier::markMentionNotificationsRead() marks every `chat`
+  # notification of that user in the room as processed, so merely catching up on
+  # the conversation would silently dismiss the lifecycle notification. Setting
+  # the read marker to the last message of the room is exactly what triggers that
+  # path - the mention below is there to show it fired.
+  Scenario: Reading the conversation does not dismiss a Thread lifecycle notification (Story 4.2, AC1)
+    Given user "participant1" creates room "room" (v4)
+      | roomType | 2 |
+      | roomName | room |
+    And user "participant1" adds user "participant2" to room "room" with 200 (v4)
+    And user "participant1" sends thread "Thread 1" with message "Message 1" to room "room" with 201
+    And user "participant2" subscribes to thread "Message 1" in room "room" with notification level 1 with 200
+    And user "participant1" sets thread "Thread 1" state to 2 in room "room" with 200
+      | reason | Off topic |
+    And user "participant1" sends message "Message 2 @participant2" to room "room" with 201
+    And user "participant2" has the following notifications
+      | app    | object_type | object_id                    | subject                                                                          |
+      | spreed | chat        | room/Message 2 @participant2 | participant1-displayname mentioned you in conversation room                      |
+      | spreed | room        | room                         | participant1-displayname locked thread Thread 1 in conversation room (Off topic) |
+      | spreed | room        | room                         | participant1-displayname invited you to a group conversation: room               |
+    When user "participant2" reads message "NULL" in room "room" with 200
+    Then user "participant2" has the following notifications
+      | app    | object_type | object_id | subject                                                                          |
+      | spreed | room        | room      | participant1-displayname locked thread Thread 1 in conversation room (Off topic) |
+      | spreed | room        | room      | participant1-displayname invited you to a group conversation: room               |
