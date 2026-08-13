@@ -816,9 +816,9 @@ class NotifierTest extends TestCase {
 			// `mention_all`, `chat`, `reaction` and `reminder`.
 			'thread title on reply' => [
 				$subject = 'reply', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user replied to your message in conversation #Thread 1, Room name',
+				'Test user (#Thread 1, Room name)',
 				[
-					'{user} replied to your message in conversation {call}',
+					'{user} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
@@ -828,9 +828,9 @@ class NotifierTest extends TestCase {
 			],
 			'thread title on mention' => [
 				$subject = 'mention', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user mentioned you in conversation #Thread 1, Room name',
+				'Test user (#Thread 1, Room name)',
 				[
-					'{user} mentioned you in conversation {call}',
+					'{user} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
@@ -840,9 +840,9 @@ class NotifierTest extends TestCase {
 			],
 			'thread title on mention_direct' => [
 				$subject = 'mention_direct', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user mentioned you in conversation #Thread 1, Room name',
+				'Test user (#Thread 1, Room name)',
 				[
-					'{user} mentioned you in conversation {call}',
+					'{user} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
@@ -852,35 +852,33 @@ class NotifierTest extends TestCase {
 			],
 			'thread title on mention_group' => [
 				$subject = 'mention_group', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser', 'sourceId' => 'test-group'], 'Test user', 'Room name',
-				'Test user mentioned group test-group in conversation #Thread 1, Room name',
+				'Test user (#Thread 1, Room name)',
 				[
-					'{user} mentioned group {group} in conversation {call}',
+					'{user} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
-						'group' => ['type' => 'user-group', 'id' => 'test-group', 'name' => 'test-group'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
 			],
 			'thread title on mention_team' => [
 				$subject = 'mention_team', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser', 'sourceId' => 'test-team'], 'Test user', 'Room name',
-				'Test user mentioned team test-team in conversation #Thread 1, Room name',
+				'Test user (#Thread 1, Room name)',
 				[
-					'{user} mentioned team {team} in conversation {call}',
+					'{user} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
-						'team' => ['type' => 'highlight', 'id' => 'test-team', 'name' => 'test-team'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
 			],
 			'thread title on mention_all' => [
 				$subject = 'mention_all', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user mentioned everyone in conversation #Thread 1, Room name',
+				'Test user (#Thread 1, Room name)',
 				[
-					'{user} mentioned everyone in conversation {call}',
+					'{user} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
@@ -890,9 +888,9 @@ class NotifierTest extends TestCase {
 			],
 			'thread title on chat' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user sent a message in conversation #Thread 1, Room name',
+				'Test user (#Thread 1, Room name)',
 				[
-					'{user} sent a message in conversation {call}',
+					'{user} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
@@ -902,9 +900,9 @@ class NotifierTest extends TestCase {
 			],
 			'thread title on reaction' => [
 				$subject = 'reaction', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser', 'reaction' => '👍'], 'Test user', 'Room name',
-				'Test user reacted with 👍 to your message in conversation #Thread 1, Room name',
+				'Test user reacted with 👍 (#Thread 1, Room name)',
 				[
-					'{user} reacted with {reaction} to your message in conversation {call}',
+					'{user} reacted with {reaction} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
@@ -915,9 +913,9 @@ class NotifierTest extends TestCase {
 			],
 			'thread title on reminder' => [
 				$subject = 'reminder', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Reminder: Test user in conversation #Thread 1, Room name',
+				'Reminder: Test user (#Thread 1, Room name)',
 				[
-					'Reminder: {user} in conversation {call}',
+					'Reminder: {user} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
@@ -980,9 +978,9 @@ class NotifierTest extends TestCase {
 			// all keep exactly `THREAD_NAME_MAX_LENGTH` characters.
 			'over-length thread title is truncated with an ellipsis' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user sent a message in conversation #' . str_repeat('a', 64) . '…, Room name',
+				'Test user (#' . str_repeat('a', 64) . '…' . ', Room name)',
 				[
-					'{user} sent a message in conversation {call}',
+					'{user} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#' . str_repeat('a', 64) . '…' . ', Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
@@ -997,9 +995,9 @@ class NotifierTest extends TestCase {
 			// which would have left it with roughly a third of the characters.
 			'over-length Vietnamese thread title keeps the full character budget' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user sent a message in conversation #Chủ đề thảo luận về việc triển khai tính năng mới của sản phẩm t…, Room name',
+				'Test user (#Chủ đề thảo luận về việc triển khai tính năng mới của sản phẩm t…, Room name)',
 				[
-					'{user} sent a message in conversation {call}',
+					'{user} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Chủ đề thảo luận về việc triển khai tính năng mới của sản phẩm t…, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
@@ -1013,9 +1011,9 @@ class NotifierTest extends TestCase {
 			// many as the ASCII case, where a byte bound would have kept about 9.
 			'over-length Japanese thread title keeps the full character budget' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user sent a message in conversation #' . str_repeat('あ', 64) . '…, Room name',
+				'Test user (#' . str_repeat('あ', 64) . '…' . ', Room name)',
 				[
-					'{user} sent a message in conversation {call}',
+					'{user} ({call})',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
 						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#' . str_repeat('あ', 64) . '…' . ', Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],

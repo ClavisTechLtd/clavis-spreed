@@ -782,37 +782,55 @@ class Notifier implements INotifier {
 			}
 
 			$richSubjectParameters = [];
-		} elseif ($this->notificationManager->isPreparingPushNotification()) {
-			$shortenMessage = Util::shortenMultibyteString($parsedMessage, 100);
-			if ($shortenMessage !== $parsedMessage) {
-				$shortenMessage .= '…';
+		} elseif ($this->notificationManager->isPreparingPushNotification() || $isThreaded) {
+			// A threaded notification takes the compact bracketed shape on *every*
+			// surface, not only on push. The desktop popup a browser raises is built
+			// from the OCS subject, not from the push payload: the notifications
+			// app's service worker only renders the pushed subject itself when no
+			// tab is open, and otherwise hands the event to the page, which fetches
+			// the notification over OCS and calls
+			// `new Notification(subject, {body: message})`. Two shapes would
+			// therefore show two different texts for the same event depending on
+			// whether a tab happened to be open.
+			$isPushNotification = $this->notificationManager->isPreparingPushNotification();
+
+			// Only a push carries its own message preview - every other surface
+			// renders the parsed message that was set above.
+			$messageLine = '';
+			if ($isPushNotification) {
+				$shortenMessage = Util::shortenMultibyteString($parsedMessage, 100);
+				if ($shortenMessage !== $parsedMessage) {
+					$shortenMessage .= '…';
+				}
+				$richSubjectParameters['message'] = [
+					'type' => 'highlight',
+					'id' => (string)$message->getMessageId(),
+					'name' => $shortenMessage,
+				];
+				$messageLine = "\n{message}";
 			}
-			$richSubjectParameters['message'] = [
-				'type' => 'highlight',
-				'id' => (string)$message->getMessageId(),
-				'name' => $shortenMessage,
-			];
+
 			if ($notification->getSubject() === 'reminder') {
 				if ($message->getActorId() === $notification->getUser()) {
 					// TRANSLATORS Reminder for a message you sent in the conversation {call}
-					$subject = ($isThreaded ? $l->t('Reminder: You ({call})') : $l->t('Reminder: You in {call}')) . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Reminder: You ({call})') : $l->t('Reminder: You in {call}')) . $messageLine;
 				} elseif ($room->getType() === Room::TYPE_ONE_TO_ONE || $room->getType() === Room::TYPE_ONE_TO_ONE_FORMER) {
 					// TRANSLATORS Reminder for a message from {user} in conversation {call}
-					$subject = ($isThreaded ? $l->t('Reminder: {user} ({call})') : $l->t('Reminder: {user} in {call}')) . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Reminder: {user} ({call})') : $l->t('Reminder: {user} in {call}')) . $messageLine;
 				} elseif ($richSubjectUser) {
 					// TRANSLATORS Reminder for a message from {user} in conversation {call}
-					$subject = ($isThreaded ? $l->t('Reminder: {user} ({call})') : $l->t('Reminder: {user} in {call}')) . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Reminder: {user} ({call})') : $l->t('Reminder: {user} in {call}')) . $messageLine;
 				} elseif (!$isGuest) {
 					// TRANSLATORS Reminder for a message from a deleted user in conversation {call}
-					$subject = ($isThreaded ? $l->t('Reminder: Deleted user ({call})') : $l->t('Reminder: Deleted user in {call}')) . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Reminder: Deleted user ({call})') : $l->t('Reminder: Deleted user in {call}')) . $messageLine;
 				} else {
 					try {
 						$richSubjectParameters['guest'] = $this->getGuestParameter($room, $message->getActorType(), $message->getActorId());
 						// TRANSLATORS Reminder for a message from a guest in conversation {call}
-						$subject = ($isThreaded ? $l->t('Reminder: {guest} (guest) ({call})') : $l->t('Reminder: {guest} (guest) in {call}')) . "\n{message}";
+						$subject = ($isThreaded ? $l->t('Reminder: {guest} (guest) ({call})') : $l->t('Reminder: {guest} (guest) in {call}')) . $messageLine;
 					} catch (ParticipantNotFoundException) {
 						// TRANSLATORS Reminder for a message from a guest in conversation {call}
-						$subject = ($isThreaded ? $l->t('Reminder: Guest ({call})') : $l->t('Reminder: Guest in {call}')) . "\n{message}";
+						$subject = ($isThreaded ? $l->t('Reminder: Guest ({call})') : $l->t('Reminder: Guest in {call}')) . $messageLine;
 					}
 				}
 			} elseif ($notification->getSubject() === 'reaction') {
@@ -823,36 +841,36 @@ class Notifier implements INotifier {
 				];
 
 				if ($room->getType() === Room::TYPE_ONE_TO_ONE || $room->getType() === Room::TYPE_ONE_TO_ONE_FORMER) {
-					$subject = ($isThreaded ? $l->t('{user} reacted with {reaction} ({call})') : $l->t('{user} reacted with {reaction}')) . "\n{message}";
+					$subject = ($isThreaded ? $l->t('{user} reacted with {reaction} ({call})') : $l->t('{user} reacted with {reaction}')) . $messageLine;
 				} elseif ($richSubjectUser) {
-					$subject = ($isThreaded ? $l->t('{user} reacted with {reaction} ({call})') : $l->t('{user} reacted with {reaction} in {call}')) . "\n{message}";
+					$subject = ($isThreaded ? $l->t('{user} reacted with {reaction} ({call})') : $l->t('{user} reacted with {reaction} in {call}')) . $messageLine;
 				} elseif (!$isGuest) {
-					$subject = ($isThreaded ? $l->t('Deleted user reacted with {reaction} ({call})') : $l->t('Deleted user reacted with {reaction} in {call}')) . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Deleted user reacted with {reaction} ({call})') : $l->t('Deleted user reacted with {reaction} in {call}')) . $messageLine;
 				} else {
 					try {
 						$richSubjectParameters['guest'] = $this->getGuestParameter($room, $message->getActorType(), $message->getActorId());
-						$subject = ($isThreaded ? $l->t('{guest} (guest) reacted with {reaction} ({call})') : $l->t('{guest} (guest) reacted with {reaction} in {call}')) . "\n{message}";
+						$subject = ($isThreaded ? $l->t('{guest} (guest) reacted with {reaction} ({call})') : $l->t('{guest} (guest) reacted with {reaction} in {call}')) . $messageLine;
 					} catch (ParticipantNotFoundException) {
-						$subject = ($isThreaded ? $l->t('Guest reacted with {reaction} ({call})') : $l->t('Guest reacted with {reaction} in {call}')) . "\n{message}";
+						$subject = ($isThreaded ? $l->t('Guest reacted with {reaction} ({call})') : $l->t('Guest reacted with {reaction} in {call}')) . $messageLine;
 					}
 				}
 			} else {
 				if ($room->getType() === Room::TYPE_ONE_TO_ONE || $room->getType() === Room::TYPE_ONE_TO_ONE_FORMER) {
 					// A threaded one-to-one still needs the location line, because
 					// `{call}` is the only place the Thread Title is named.
-					$subject = ($isThreaded ? '{user} ({call})' : '{user}') . "\n{message}";
+					$subject = ($isThreaded ? '{user} ({call})' : '{user}') . $messageLine;
 				} elseif ($richSubjectUser) {
 					// Not translated when threaded: the string is punctuation and two
 					// placeholders, so there is nothing for a translator to move.
-					$subject = ($isThreaded ? '{user} ({call})' : $l->t('{user} in {call}')) . "\n{message}";
+					$subject = ($isThreaded ? '{user} ({call})' : $l->t('{user} in {call}')) . $messageLine;
 				} elseif (!$isGuest) {
-					$subject = ($isThreaded ? $l->t('Deleted user ({call})') : $l->t('Deleted user in {call}')) . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Deleted user ({call})') : $l->t('Deleted user in {call}')) . $messageLine;
 				} else {
 					try {
 						$richSubjectParameters['guest'] = $this->getGuestParameter($room, $message->getActorType(), $message->getActorId());
-						$subject = ($isThreaded ? $l->t('{guest} (guest) ({call})') : $l->t('{guest} (guest) in {call}')) . "\n{message}";
+						$subject = ($isThreaded ? $l->t('{guest} (guest) ({call})') : $l->t('{guest} (guest) in {call}')) . $messageLine;
 					} catch (ParticipantNotFoundException) {
-						$subject = ($isThreaded ? $l->t('Guest ({call})') : $l->t('Guest in {call}')) . "\n{message}";
+						$subject = ($isThreaded ? $l->t('Guest ({call})') : $l->t('Guest in {call}')) . $messageLine;
 					}
 				}
 			}
