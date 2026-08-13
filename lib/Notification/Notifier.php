@@ -70,6 +70,18 @@ class Notifier implements INotifier {
 	public const THREAD_NAME_MAX_LENGTH = 64;
 
 	/**
+	 * Marks a Thread Title where it is composed into the conversation name of a
+	 * notification subject, so a reader can tell "#Release plan, Team" apart from
+	 * a conversation that happens to be called "Release plan, Team".
+	 *
+	 * Deliberately not translated: it is a sigil rather than a word, it is the
+	 * convention the users of this fork already read as "thread" from other chat
+	 * clients, and it must stay stable for the mobile clients that render the
+	 * composed name verbatim.
+	 */
+	public const THREAD_LOCATION_PREFIX = '#';
+
+	/**
 	 * Story 4.2: a lock reason may be up to
 	 * {@see \OCA\Talk\Model\Thread::LOCK_REASON_MAX_LENGTH} characters, which is
 	 * unusable in a notification subject. Like the Thread Title bound above this
@@ -677,6 +689,57 @@ class Notifier implements INotifier {
 			}
 		}
 
+		// Story 4.1: the Thread Title arrives as message parameter data
+		// (@see \OCA\Talk\Chat\Notifier::createNotification()), so no Thread is
+		// looked up here.
+		//
+		// It is composed into the `call` parameter rather than carried as a
+		// separate `{thread}` placeholder, because both shipped mobile clients
+		// rebuild the notification title from the rich subject parameters and
+		// discard the server's rendered subject entirely:
+		// - Android `NotificationWorker::enrichPushMessageByNcNotificationData()`
+		//   sets the title to `call.name` alone for the `chat` object type.
+		// - iOS `NCNotification::chatMessageTitle` renders `user.name` + "in" +
+		//   `call.name` and ignores every other placeholder it finds.
+		// Both fetch the notification from the OCS endpoint, so this holds for the
+		// in-app shape as well as the push one. A placeholder the clients do not
+		// know about is therefore invisible on mobile, which is the constraint
+		// that blocked Story 4.3; naming the Thread inside `call.name` reaches
+		// Android, iOS, web push and the in-app inbox without a client release.
+		//
+		// AD-20: a Thread Title is user-authored content of message grade, so it
+		// is withheld wherever the sensitive-conversation branch below already
+		// withholds the message preview - that branch resets
+		// `$richSubjectParameters` and must stay authoritative.
+		// Notifications persisted before this change carry no `threadName` and
+		// therefore render exactly as they did.
+		$isThreaded = false;
+		if (!$participant->getAttendee()->isSensitive()
+			&& isset($messageParameters['threadId'], $messageParameters['threadName'])
+			&& is_string($messageParameters['threadName'])) {
+			// A Thread Title is user-authored and only trimmed on input (creation
+			// does not even trim), so it can contain line breaks and other
+			// presentation-altering characters. Sanitising and bounding it is
+			// {@see self::shortenThreadText()}, shared with the Thread lifecycle
+			// subjects of Story 4.2 so there is exactly one implementation of that
+			// rule. A title that is empty once sanitised names no Thread at all,
+			// and the conversation name is then left exactly as it was.
+			$threadName = $this->shortenThreadText($messageParameters['threadName'], self::THREAD_NAME_MAX_LENGTH);
+
+			if ($threadName !== '') {
+				$isThreaded = true;
+				$threadLocation = self::THREAD_LOCATION_PREFIX . $threadName;
+				if ($room->getType() !== Room::TYPE_ONE_TO_ONE && $room->getType() !== Room::TYPE_ONE_TO_ONE_FORMER) {
+					// A one-to-one conversation is named after the other participant,
+					// who is already the `{user}` of every subject below, so repeating
+					// it would only spend budget on a line the push transport may
+					// still truncate.
+					$threadLocation .= ', ' . $richSubjectCall['name'];
+				}
+				$richSubjectCall['name'] = $threadLocation;
+			}
+		}
+
 		$richSubjectParameters = [
 			'user' => $richSubjectUser,
 			'call' => $richSubjectCall,
@@ -732,24 +795,24 @@ class Notifier implements INotifier {
 			if ($notification->getSubject() === 'reminder') {
 				if ($message->getActorId() === $notification->getUser()) {
 					// TRANSLATORS Reminder for a message you sent in the conversation {call}
-					$subject = $l->t('Reminder: You in {call}') . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Reminder: You ({call})') : $l->t('Reminder: You in {call}')) . "\n{message}";
 				} elseif ($room->getType() === Room::TYPE_ONE_TO_ONE || $room->getType() === Room::TYPE_ONE_TO_ONE_FORMER) {
 					// TRANSLATORS Reminder for a message from {user} in conversation {call}
-					$subject = $l->t('Reminder: {user} in {call}') . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Reminder: {user} ({call})') : $l->t('Reminder: {user} in {call}')) . "\n{message}";
 				} elseif ($richSubjectUser) {
 					// TRANSLATORS Reminder for a message from {user} in conversation {call}
-					$subject = $l->t('Reminder: {user} in {call}') . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Reminder: {user} ({call})') : $l->t('Reminder: {user} in {call}')) . "\n{message}";
 				} elseif (!$isGuest) {
 					// TRANSLATORS Reminder for a message from a deleted user in conversation {call}
-					$subject = $l->t('Reminder: Deleted user in {call}') . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Reminder: Deleted user ({call})') : $l->t('Reminder: Deleted user in {call}')) . "\n{message}";
 				} else {
 					try {
 						$richSubjectParameters['guest'] = $this->getGuestParameter($room, $message->getActorType(), $message->getActorId());
 						// TRANSLATORS Reminder for a message from a guest in conversation {call}
-						$subject = $l->t('Reminder: {guest} (guest) in {call}') . "\n{message}";
+						$subject = ($isThreaded ? $l->t('Reminder: {guest} (guest) ({call})') : $l->t('Reminder: {guest} (guest) in {call}')) . "\n{message}";
 					} catch (ParticipantNotFoundException) {
 						// TRANSLATORS Reminder for a message from a guest in conversation {call}
-						$subject = $l->t('Reminder: Guest in {call}') . "\n{message}";
+						$subject = ($isThreaded ? $l->t('Reminder: Guest ({call})') : $l->t('Reminder: Guest in {call}')) . "\n{message}";
 					}
 				}
 			} elseif ($notification->getSubject() === 'reaction') {
@@ -760,32 +823,36 @@ class Notifier implements INotifier {
 				];
 
 				if ($room->getType() === Room::TYPE_ONE_TO_ONE || $room->getType() === Room::TYPE_ONE_TO_ONE_FORMER) {
-					$subject = $l->t('{user} reacted with {reaction}') . "\n{message}";
+					$subject = ($isThreaded ? $l->t('{user} reacted with {reaction} ({call})') : $l->t('{user} reacted with {reaction}')) . "\n{message}";
 				} elseif ($richSubjectUser) {
-					$subject = $l->t('{user} reacted with {reaction} in {call}') . "\n{message}";
+					$subject = ($isThreaded ? $l->t('{user} reacted with {reaction} ({call})') : $l->t('{user} reacted with {reaction} in {call}')) . "\n{message}";
 				} elseif (!$isGuest) {
-					$subject = $l->t('Deleted user reacted with {reaction} in {call}') . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Deleted user reacted with {reaction} ({call})') : $l->t('Deleted user reacted with {reaction} in {call}')) . "\n{message}";
 				} else {
 					try {
 						$richSubjectParameters['guest'] = $this->getGuestParameter($room, $message->getActorType(), $message->getActorId());
-						$subject = $l->t('{guest} (guest) reacted with {reaction} in {call}') . "\n{message}";
+						$subject = ($isThreaded ? $l->t('{guest} (guest) reacted with {reaction} ({call})') : $l->t('{guest} (guest) reacted with {reaction} in {call}')) . "\n{message}";
 					} catch (ParticipantNotFoundException) {
-						$subject = $l->t('Guest reacted with {reaction} in {call}') . "\n{message}";
+						$subject = ($isThreaded ? $l->t('Guest reacted with {reaction} ({call})') : $l->t('Guest reacted with {reaction} in {call}')) . "\n{message}";
 					}
 				}
 			} else {
 				if ($room->getType() === Room::TYPE_ONE_TO_ONE || $room->getType() === Room::TYPE_ONE_TO_ONE_FORMER) {
-					$subject = "{user}\n{message}";
+					// A threaded one-to-one still needs the location line, because
+					// `{call}` is the only place the Thread Title is named.
+					$subject = ($isThreaded ? '{user} ({call})' : '{user}') . "\n{message}";
 				} elseif ($richSubjectUser) {
-					$subject = $l->t('{user} in {call}') . "\n{message}";
+					// Not translated when threaded: the string is punctuation and two
+					// placeholders, so there is nothing for a translator to move.
+					$subject = ($isThreaded ? '{user} ({call})' : $l->t('{user} in {call}')) . "\n{message}";
 				} elseif (!$isGuest) {
-					$subject = $l->t('Deleted user in {call}') . "\n{message}";
+					$subject = ($isThreaded ? $l->t('Deleted user ({call})') : $l->t('Deleted user in {call}')) . "\n{message}";
 				} else {
 					try {
 						$richSubjectParameters['guest'] = $this->getGuestParameter($room, $message->getActorType(), $message->getActorId());
-						$subject = $l->t('{guest} (guest) in {call}') . "\n{message}";
+						$subject = ($isThreaded ? $l->t('{guest} (guest) ({call})') : $l->t('{guest} (guest) in {call}')) . "\n{message}";
 					} catch (ParticipantNotFoundException) {
-						$subject = $l->t('Guest in {call}') . "\n{message}";
+						$subject = ($isThreaded ? $l->t('Guest ({call})') : $l->t('Guest in {call}')) . "\n{message}";
 					}
 				}
 			}
@@ -969,45 +1036,6 @@ class Notifier implements INotifier {
 
 		if (array_key_exists('user', $richSubjectParameters) && $richSubjectParameters['user'] === null) {
 			unset($richSubjectParameters['user']);
-		}
-
-		// Story 4.1: the Thread Title arrives as message parameter data
-		// (@see \OCA\Talk\Chat\Notifier::createNotification()), so no Thread is
-		// looked up here. Appending it once, after the subject ladder, gives all
-		// nine gated subjects the title without a single subject template having
-		// to carry a `{thread}` placeholder, and works for both the in-app shape
-		// (`{user} in {call}`) and the push shape (`{user} in {call}\n{message}`)
-		// because only the first line is touched.
-		// AD-20: a Thread Title is user-authored content of message grade, so it
-		// is withheld wherever the sensitive-conversation branch above already
-		// withholds the message preview - that branch resets
-		// `$richSubjectParameters` and must stay authoritative.
-		// Notifications persisted before this change carry no `threadName` and
-		// therefore render exactly as they did.
-		if (!$participant->getAttendee()->isSensitive()
-			&& isset($messageParameters['threadId'], $messageParameters['threadName'])
-			&& is_string($messageParameters['threadName'])) {
-			// A Thread Title is user-authored and only trimmed on input (creation
-			// does not even trim), so it can contain line breaks and other
-			// presentation-altering characters. Sanitising and bounding it is
-			// {@see self::shortenThreadText()}, shared with the Thread lifecycle
-			// subjects of Story 4.2 so there is exactly one implementation of that
-			// rule. A title that is empty once sanitised renders no thread fragment
-			// at all - "(in thread    )" says nothing.
-			$threadName = $this->shortenThreadText($messageParameters['threadName'], self::THREAD_NAME_MAX_LENGTH);
-
-			if ($threadName !== '') {
-				$richSubjectParameters['thread'] = [
-					'type' => 'highlight',
-					'id' => 'thread/' . (string)$messageParameters['threadId'],
-					'name' => $threadName,
-				];
-
-				$lines = explode("\n", $subject, 2);
-				// TRANSLATORS {thread} is the user-authored title of the thread the activity happened in
-				$lines[0] .= ' ' . $l->t('(in thread {thread})');
-				$subject = implode("\n", $lines);
-			}
 		}
 
 		// `strtr()` rather than `str_replace()` with array arguments: the latter

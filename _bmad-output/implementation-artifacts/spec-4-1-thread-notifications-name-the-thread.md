@@ -106,6 +106,14 @@ warnings: ['oversized']
 - **Known-bad state avoided:** a Vietnamese-facing deployment shipping thread titles truncated to roughly a third of their intended length.
 - **KEEP:** the push **byte** budget is deliberately not this constant's concern. Story 4.3 owns it (AC8-AC11) and now has a measured figure: the notifications app caps the entire push JSON at 200 bytes (`apps/notifications/lib/Push.php:877-894`), with the object id competing against the subject for that space.
 
+### 2026-08-13 — Rendering contract changed on user instruction (post-review, out-of-band)
+
+- **Trigger:** on the dev instance the thread name never reached Android or iOS. Verified firsthand against the shipped clients: `NotificationWorker::enrichPushMessageByNcNotificationData()` (`clavis-talk-android`) sets the title to `call.name` alone for the `chat` object type, and `NCNotification::chatMessageTitle` (`clavis-talk-ios`) renders `user.name` + "in" + `call.name`. Both fetch the notification from the OCS endpoint and discard the server's rendered subject, so the `{thread}` placeholder AC1 introduced was invisible on mobile — the same class of constraint that blocked Story 4.3.
+- **Change:** the Thread Title is now composed into the `call` rich parameter as `#<title>, <conversation>` (`#<title>` alone in a one-to-one, whose name is already the `{user}`), and the `(in thread {thread})` fragment and the `thread` rich parameter are gone. Push subjects gained a bracketed Discord-style shape, `{user} ({call})`, at the user's explicit request.
+- **What AC1 still guarantees:** every one of the nine gated subjects names the Thread, the title is still bounded and sanitised by `shortenThreadText()`, and AD-20 still withholds it in sensitive conversations. What changed is *where* the title is rendered, not *whether* it is.
+- **Why recorded rather than escalated:** this is a direct user instruction issued after the story closed, not a defect found in review.
+- **Scope note:** the `#` sigil is deliberately untranslated — it is punctuation the mobile clients render verbatim.
+
 ## Review Triage Log
 
 ### 2026-08-12 — Review pass

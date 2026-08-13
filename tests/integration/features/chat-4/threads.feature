@@ -83,21 +83,21 @@ Feature: chat-4/threads
     And user "participant2" sends reply "Message 1-2" on message "Message 1" to room "room" with 201
     And user "participant1" has the following notifications
       | app    | object_type | object_id        | subject                                                               |
-      | spreed | chat        | room/Message 1-2/Thread 1 | participant2-displayname replied to your message in conversation room (in thread Thread 1) |
+      | spreed | chat        | room/Message 1-2/Thread 1 | participant2-displayname replied to your message in conversation #Thread 1, room |
     And user "participant1" subscribes to thread "Message 1" in room "room" with notification level 1 with 200
       | t.id      | t.title  | t.numReplies | t.lastMessage | a.notificationLevel | firstMessage | lastMessage |
       | Message 1 | Thread 1 | 2            | Message 1-2   | 1                   | Message 1    | Message 1-2 |
     And user "participant2" sends reply "Message 1-3" on thread "Thread 1" to room "room" with 201
     And user "participant1" has the following notifications
       | app    | object_type | object_id                 | subject                                                               |
-      | spreed | chat        | room/Message 1-3/Thread 1 | participant2-displayname sent a message in conversation room (in thread Thread 1)          |
-      | spreed | chat        | room/Message 1-2/Thread 1 | participant2-displayname replied to your message in conversation room (in thread Thread 1) |
+      | spreed | chat        | room/Message 1-3/Thread 1 | participant2-displayname sent a message in conversation #Thread 1, room          |
+      | spreed | chat        | room/Message 1-2/Thread 1 | participant2-displayname replied to your message in conversation #Thread 1, room |
     When user "participant2" sends reply "@participant1" on thread "Thread 1" to room "room" with 201
     Then user "participant1" has the following notifications
       | app    | object_type | object_id                   | subject                                                     |
-      | spreed | chat        | room/@participant1/Thread 1 | participant2-displayname mentioned you in conversation room (in thread Thread 1) |
-      | spreed | chat        | room/Message 1-3/Thread 1   | participant2-displayname sent a message in conversation room (in thread Thread 1)          |
-      | spreed | chat        | room/Message 1-2/Thread 1   | participant2-displayname replied to your message in conversation room (in thread Thread 1) |
+      | spreed | chat        | room/@participant1/Thread 1 | participant2-displayname mentioned you in conversation #Thread 1, room |
+      | spreed | chat        | room/Message 1-3/Thread 1   | participant2-displayname sent a message in conversation #Thread 1, room          |
+      | spreed | chat        | room/Message 1-2/Thread 1   | participant2-displayname replied to your message in conversation #Thread 1, room |
 
   Scenario: Thread titles are trimmed
     Given user "participant1" creates room "room" (v4)
@@ -220,7 +220,7 @@ Feature: chat-4/threads
       | Message 1 | room1   | Thread 1 | 1            | Message 2     | 0                   | Message 1    | Message 2   |
     And user "participant1" has the following notifications
       | app    | object_type | object_id       | subject                                                                |
-      | spreed | chat        | room1/Message 2/Thread 1 | participant2-displayname replied to your message in conversation room1 (in thread Thread 1) |
+      | spreed | chat        | room1/Message 2/Thread 1 | participant2-displayname replied to your message in conversation #Thread 1, room1 |
     Then user "participant2" sees the following subscribed threads
       | t.id      | t.token | t.title  | t.numReplies | t.lastMessage | a.notificationLevel | firstMessage | lastMessage |
       | Message 1 | room1   | Thread 1 | 1            | Message 2     | 0                   | Message 1    | Message 2   |
@@ -241,7 +241,7 @@ Feature: chat-4/threads
     Then user "participant1" has the following notifications
       | app    | object_type | object_id                        | subject                                                                                            |
       | spreed | chat        | room1/Message 4                  | participant2-displayname replied to your message in conversation room1                              |
-      | spreed | chat        | room1/Message 3/Bảo trì hệ thống | participant2-displayname replied to your message in conversation room1 (in thread Bảo trì hệ thống) |
+      | spreed | chat        | room1/Message 3/Bảo trì hệ thống | participant2-displayname replied to your message in conversation #Bảo trì hệ thống, room1 |
 
   Scenario: Post a message with an attachment (not replying)
     Given user "participant1" creates room "room1" (v4)
@@ -676,7 +676,7 @@ Feature: chat-4/threads
       | spreed | room        | room      | participant1-displayname invited you to a group conversation: room   |
     And user "participant1" has the following notifications
       | app    | object_type | object_id                 | subject                                                                                    |
-      | spreed | chat        | room/Message 1-1/Thread 1 | participant2-displayname replied to your message in conversation room (in thread Thread 1) |
+      | spreed | chat        | room/Message 1-1/Thread 1 | participant2-displayname replied to your message in conversation #Thread 1, room |
 
   # This is the scenario the object type decision rests on: `chat` was rejected
   # because Chat\Notifier::markMentionNotificationsRead() marks every `chat`

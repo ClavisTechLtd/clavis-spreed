@@ -808,150 +808,143 @@ class NotifierTest extends TestCase {
 			],
 
 			// Story 4.1, AC1: every subject routed to `parseChatMessage()` by the
-			// gate in `Notifier::prepare()` gains the Thread Title. The gate is the
+			// gate in `Notifier::prepare()` names the Thread, by composing its title
+			// into the `call` parameter - the only parameter both shipped mobile
+			// clients read when they rebuild the title. The gate is the
 			// authoritative enumeration, so there is one case per subject below -
 			// `reply`, `mention`, `mention_direct`, `mention_group`, `mention_team`,
 			// `mention_all`, `chat`, `reaction` and `reminder`.
 			'thread title on reply' => [
 				$subject = 'reply', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user replied to your message in conversation Room name (in thread Thread 1)',
+				'Test user replied to your message in conversation #Thread 1, Room name',
 				[
-					'{user} replied to your message in conversation {call} (in thread {thread})',
+					'{user} replied to your message in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
 			],
 			'thread title on mention' => [
 				$subject = 'mention', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user mentioned you in conversation Room name (in thread Thread 1)',
+				'Test user mentioned you in conversation #Thread 1, Room name',
 				[
-					'{user} mentioned you in conversation {call} (in thread {thread})',
+					'{user} mentioned you in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
 			],
 			'thread title on mention_direct' => [
 				$subject = 'mention_direct', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user mentioned you in conversation Room name (in thread Thread 1)',
+				'Test user mentioned you in conversation #Thread 1, Room name',
 				[
-					'{user} mentioned you in conversation {call} (in thread {thread})',
+					'{user} mentioned you in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
 			],
 			'thread title on mention_group' => [
 				$subject = 'mention_group', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser', 'sourceId' => 'test-group'], 'Test user', 'Room name',
-				'Test user mentioned group test-group in conversation Room name (in thread Thread 1)',
+				'Test user mentioned group test-group in conversation #Thread 1, Room name',
 				[
-					'{user} mentioned group {group} in conversation {call} (in thread {thread})',
+					'{user} mentioned group {group} in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 						'group' => ['type' => 'user-group', 'id' => 'test-group', 'name' => 'test-group'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
 			],
 			'thread title on mention_team' => [
 				$subject = 'mention_team', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser', 'sourceId' => 'test-team'], 'Test user', 'Room name',
-				'Test user mentioned team test-team in conversation Room name (in thread Thread 1)',
+				'Test user mentioned team test-team in conversation #Thread 1, Room name',
 				[
-					'{user} mentioned team {team} in conversation {call} (in thread {thread})',
+					'{user} mentioned team {team} in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 						'team' => ['type' => 'highlight', 'id' => 'test-team', 'name' => 'test-team'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
 			],
 			'thread title on mention_all' => [
 				$subject = 'mention_all', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user mentioned everyone in conversation Room name (in thread Thread 1)',
+				'Test user mentioned everyone in conversation #Thread 1, Room name',
 				[
-					'{user} mentioned everyone in conversation {call} (in thread {thread})',
+					'{user} mentioned everyone in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
 			],
 			'thread title on chat' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user sent a message in conversation Room name (in thread Thread 1)',
+				'Test user sent a message in conversation #Thread 1, Room name',
 				[
-					'{user} sent a message in conversation {call} (in thread {thread})',
+					'{user} sent a message in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
 			],
 			'thread title on reaction' => [
 				$subject = 'reaction', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser', 'reaction' => '👍'], 'Test user', 'Room name',
-				'Test user reacted with 👍 to your message in conversation Room name (in thread Thread 1)',
+				'Test user reacted with 👍 to your message in conversation #Thread 1, Room name',
 				[
-					'{user} reacted with {reaction} to your message in conversation {call} (in thread {thread})',
+					'{user} reacted with {reaction} to your message in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 						'reaction' => ['type' => 'highlight', 'id' => '👍', 'name' => '👍'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
 			],
 			'thread title on reminder' => [
 				$subject = 'reminder', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Reminder: Test user in conversation Room name (in thread Thread 1)',
+				'Reminder: Test user in conversation #Thread 1, Room name',
 				[
-					'Reminder: {user} in conversation {call} (in thread {thread})',
+					'Reminder: {user} in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = 'Thread 1',
 			],
 
-			// Story 4.1: the thread fragment is appended to the first line only, so
-			// the push shape keeps the message preview on its own line.
+			// Story 4.1: a threaded push uses the bracketed location shape, so the
+			// header names the Thread and the conversation while the message
+			// preview keeps its own line.
 			'thread title on a push notification touches the first line only' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user in Room name (in thread Thread 1)' . "\n" . 'Hi @Administrator',
+				'Test user (#Thread 1, Room name)' . "\n" . 'Hi @Administrator',
 				[
-					'{user} in {call} (in thread {thread})' . "\n" . '{message}',
+					'{user} ({call})' . "\n" . '{message}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 						'message' => ['type' => 'highlight', 'id' => '123456789', 'name' => 'Hi @Administrator'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = true, $threadId = 77, $threadName = 'Thread 1',
 			],
 
 			// Story 4.1: activity outside any Thread is byte-identical to before.
-			'no thread means no thread fragment' => [
+			'no thread leaves the conversation name alone' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
 				'Test user sent a message in conversation Room name',
 				[
@@ -979,20 +972,20 @@ class NotifierTest extends TestCase {
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = null,
 			],
 
-			// Story 4.1: the title is length bounded with a visible truncation
+			// Story 4.1: the title is length bounded before it is composed into the
+			// conversation name, with a visible truncation
 			// indicator, and the bound is applied to the title alone - the 100
 			// character message preview budget is untouched. The bound counts
 			// *characters*, so the three cases below (ASCII, Vietnamese, Japanese)
 			// all keep exactly `THREAD_NAME_MAX_LENGTH` characters.
 			'over-length thread title is truncated with an ellipsis' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user sent a message in conversation Room name (in thread ' . str_repeat('a', 64) . '…)',
+				'Test user sent a message in conversation #' . str_repeat('a', 64) . '…, Room name',
 				[
-					'{user} sent a message in conversation {call} (in thread {thread})',
+					'{user} sent a message in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => str_repeat('a', 64) . '…'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#' . str_repeat('a', 64) . '…' . ', Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77, $threadName = str_repeat('a', 70),
@@ -1004,13 +997,12 @@ class NotifierTest extends TestCase {
 			// which would have left it with roughly a third of the characters.
 			'over-length Vietnamese thread title keeps the full character budget' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user sent a message in conversation Room name (in thread Chủ đề thảo luận về việc triển khai tính năng mới của sản phẩm t…)',
+				'Test user sent a message in conversation #Chủ đề thảo luận về việc triển khai tính năng mới của sản phẩm t…, Room name',
 				[
-					'{user} sent a message in conversation {call} (in thread {thread})',
+					'{user} sent a message in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Chủ đề thảo luận về việc triển khai tính năng mới của sản phẩm t…'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Chủ đề thảo luận về việc triển khai tính năng mới của sản phẩm t…, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77,
@@ -1021,13 +1013,12 @@ class NotifierTest extends TestCase {
 			// many as the ASCII case, where a byte bound would have kept about 9.
 			'over-length Japanese thread title keeps the full character budget' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user sent a message in conversation Room name (in thread ' . str_repeat('あ', 64) . '…)',
+				'Test user sent a message in conversation #' . str_repeat('あ', 64) . '…, Room name',
 				[
-					'{user} sent a message in conversation {call} (in thread {thread})',
+					'{user} sent a message in conversation {call}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => str_repeat('あ', 64) . '…'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#' . str_repeat('あ', 64) . '…' . ', Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = false, $threadId = 77,
@@ -1043,14 +1034,13 @@ class NotifierTest extends TestCase {
 			// one the push shape itself contributes.
 			'thread title with a line break can not forge a second push line' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
-				'Test user in Room name (in thread Thread 1 Your account was accessed)' . "\n" . 'Hi @Administrator',
+				'Test user (#Thread 1 Your account was accessed, Room name)' . "\n" . 'Hi @Administrator',
 				[
-					'{user} in {call} (in thread {thread})' . "\n" . '{message}',
+					'{user} ({call})' . "\n" . '{message}',
 					[
 						'user' => ['type' => 'user', 'id' => 'testUser', 'name' => 'Test user'],
-						'call' => ['type' => 'call', 'id' => 1234, 'name' => 'Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
+						'call' => ['type' => 'call', 'id' => 1234, 'name' => '#Thread 1 Your account was accessed, Room name', 'call-type' => 'group', 'icon-url' => 'getAvatarUrl'],
 						'message' => ['type' => 'highlight', 'id' => '123456789', 'name' => 'Hi @Administrator'],
-						'thread' => ['type' => 'highlight', 'id' => 'thread/77', 'name' => 'Thread 1 Your account was accessed'],
 					],
 				],
 				$deletedUser = false, $guestName = null, $isPushNotification = true, $threadId = 77,
@@ -1058,8 +1048,8 @@ class NotifierTest extends TestCase {
 			],
 
 			// Story 4.1: `createThread()` does not trim, so a whitespace-only title
-			// can reach the renderer. It must not render "(in thread    )".
-			'whitespace-only thread title renders no thread fragment' => [
+			// can reach the renderer. It must not render "#   , Room name".
+			'whitespace-only thread title leaves the conversation name alone' => [
 				$subject = 'chat', Room::TYPE_GROUP, ['userType' => 'users', 'userId' => 'testUser'], 'Test user', 'Room name',
 				'Test user sent a message in conversation Room name',
 				[
