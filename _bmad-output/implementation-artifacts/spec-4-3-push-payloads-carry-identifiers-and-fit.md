@@ -2,7 +2,8 @@
 title: 'Story 4.3: Push payloads carry the same identifiers as in-app notifications, and fit'
 type: 'feature'
 created: '2026-08-12'
-status: 'ready-for-dev'
+baseline_revision: '552b827b7'
+status: 'blocked'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -97,6 +98,33 @@ warnings: ['oversized']
 
 ## Review Triage Log
 
+### 2026-08-12 — Review pass
+- intent_gap: 1: (high 1)
+- bad_spec: 0
+- patch: 0
+- defer: 0
+- reject: 0
+- addressed_findings:
+  - none
+
+**Intent gap — AC1 rests on a false premise about the client contract.**
+
+The captured intent says a push payload should carry the composed identifier "in the same composed form the in-app notification uses, so a client parses one shape". The shipped clients do not parse one shape. The same server-side value, `INotification::getObjectId()`, is consumed two different ways:
+
+- **The OCS `object_id`**, fetched over the API, *is* parsed positionally — `NotificationWorker.kt:1015-1025` splits on `/` and reads index 1 as the message id and index 2 as the thread id.
+- **The push payload's `id`**, which `Push::encodeNotif()` fills from that same `getObjectId()`, is consumed as the **bare room token**: `NCPushNotification.m:50` assigns it straight to `pushNotification.roomToken`, and Android passes `pushMessage.id` as `KEY_ROOM_TOKEN` at `NotificationWorker.kt:232, 372, 624, 669, 726, 749, 863, 971, 1068`. Neither client ever splits it.
+
+The guard this story was written to correct is therefore load-bearing: it is what keeps the push `id` a bare room token. Removing it composes `{token}/{messageId}/{threadId}` into the field both clients read as the room token, so on every shipped Android and iOS client tapping the push fails to open the conversation, inline reply posts to a non-existent room, and per-room notification grouping breaks. That is the opposite of the story's stated goal of removing a fallback failure mode.
+
+This cannot be resolved from the spec, and there is more than one defensible way forward, so it is not inferable:
+1. Ship the client changes first (or alongside), then land the server change — the epic already anticipates a later mobile epic adopting these identifiers.
+2. Capability-gate the composed push id so only clients that advertise support receive it.
+3. Accept that FR-35 is not deliverable by the server alone and rescope the story to the measured-budget work only.
+
+A second, independent finding also stands regardless of the above: an existing integration assertion at `tests/integration/features/conversation-5/sensitive.feature:43-45` expects the bare token as `object_id` for notifications in a sensitive conversation, which any unconditional composition turns red.
+
+Code changes were reverted; the working tree is back to `552b827b7`.
+
 ## Design Notes
 
 **Why the guard is wrong rather than merely incomplete.** The two `setObject()` calls accumulate: the first rewrites the object id from `{token}` to `{token}/{messageId}`, and the second reads that result and appends `/{threadId}`. Both sit inside a guard whose purpose is to withhold *message content*. Identifiers were swept up by proximity, not by intent. AD-20 draws the line explicitly: routing identifiers name a destination without disclosing what is in it, so they travel where a title or a reason may not.
@@ -117,3 +145,24 @@ warnings: ['oversized']
 
 **Manual checks (if no CLI):**
 - Confirm `tests/integration/features/chat-4/threads.feature:223` still reads `room1/Message 2/Thread 1`.
+
+## Auto Run Result
+
+Status: blocked
+Blocking condition: intent gap in intent contract
+
+**Summary.** Story 4.3 was implemented and reverted. The implementation itself was sound and fully verified (NotifierTest 153/153, psalm clean, php-cs-fixer clean, no new failures), but adversarial review established that its governing acceptance criterion rests on a false premise about the shipped mobile clients, so landing it would break push navigation on every current Android and iOS client.
+
+**The gap.** `INotification::getObjectId()` feeds two consumers with incompatible contracts:
+- the OCS `object_id`, which clients parse positionally (`NotificationWorker.kt:1015-1025`);
+- the push payload's `id`, which clients consume as the bare room token (`NCPushNotification.m:50`; `NotificationWorker.kt:232` and eight further `KEY_ROOM_TOKEN` sites).
+
+`Push::encodeNotif()` fills the push `id` from `getObjectId()`, so composing the identifier into it destroys the room token. The guard the story set out to correct is what currently prevents that.
+
+**Decision required (not inferable):** ship client support first, capability-gate the composed push id, or rescope FR-35 as not server-deliverable.
+
+**Verification performed.** Client behaviour read directly from `/home/tinxu-luna/clavis-tech/clavis-talk-android` and `/home/tinxu-luna/clavis-tech/clavis-talk-ios`; platform encoding read from the running container at `/var/www/html/apps/notifications/lib/Push.php`; the conflicting existing assertion confirmed at `tests/integration/features/conversation-5/sensitive.feature:43-45`.
+
+**Residual risk.** None introduced — `lib/` and `tests/` are byte-identical to `552b827b7`.
+
+**Salvageable, if the story is rescoped.** The measured push budget is real and independently useful: `Push::encryptAndSign()` caps the whole payload JSON at 200 bytes, and the existing fixed 100-character preview truncation is unrelated to that limit. That work does not depend on lengthening the object id.
