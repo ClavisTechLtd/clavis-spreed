@@ -15,10 +15,25 @@ and the hot-patch script `clavis-deploy/ops/patch-talk-thread-notification.sh`.
 
 ## Context
 
-`ClavisTechLtd/clavis-deploy#22` reports eight gaps in Talk 24's threads. Trọng
+`ClavisTechLtd/clavis-deploy#22` reports ten gaps in Talk 24's threads. Trọng
 Tín runs many threads inside one conversation and cannot close a thread, pin it,
 label it, count unread per thread, find one by name, or tell from a notification
 which thread a message belongs to.
+
+What this fork delivers today, against that list: **items 1, 2, 3, 8 and 10**,
+plus part of item 4 (thread state is visible where a thread appears; the
+first-class Thread Directory is Epic 2). Items **5 (pin), 6 (tag/label),
+7 (search) and 9 (unread count)** are Epics 2 and 3, still in backlog. Item 8's
+client-side half — the browser service worker that opens the thread rather than
+the dashboard — ships separately in
+`clavis-deploy/services/nextcloud-notifications-patch`.
+
+One further story is deliberately not shipping: Story 4.3 would compose the
+thread id into the push payload's `id` field, but that field is read as a bare
+room token by every shipped client (`NCPushNotification.m:50`;
+`NotificationWorker.kt` at nine `KEY_ROOM_TOKEN` sites), so landing it would
+break push navigation on all of them. It stays blocked pending a client change
+or a capability gate.
 
 Two attempts preceded this ADR, and both are informative:
 
@@ -90,11 +105,21 @@ rsync. The mount is read-only on purpose, so that an appstore update of Talk
 fails loudly instead of silently reverting Clavis code — the exact defect the hot
 patch has today.
 
-**`clavis_talk_threads` is retired.** Items 1-6 and 8 of `clavis-deploy#22` are
-delivered here. The app is unmounted from `clavis-core/docker-compose.yml` and
-disabled before the fork is enabled; two implementations of thread state must
-never run against the same conversation. It was never deployed to a customer —
-staging only — so no data migration is owed.
+**`clavis_talk_threads` is retired**, and this costs capability in the short
+term. The two implementations overlap on thread state, which is the part that
+must never run twice against one conversation — the companion app enforces
+Archived through `ArchivedThreadGuard` on `BeforeChatMessageSentEvent` while the
+fork enforces Locked inside `ChatManager`, so with both mounted a message can be
+refused by two different rules with two different error shapes. So it is
+unmounted from `clavis-core/docker-compose.yml` and disabled before the fork is
+enabled.
+
+The cost: pin, tag/label, search and per-thread unread (issue #22 items 5, 6, 7,
+9) exist in the companion app and do not exist in the fork until Epics 2 and 3
+land. Retiring it removes them from staging. This is acceptable only because the
+app was **never deployed to a customer** — staging only, so no customer loses a
+feature and no data migration is owed. If Epics 2 and 3 slip, the gap is a
+backlog item, not a regression to a shipped promise.
 
 ## Consequences
 
@@ -103,6 +128,10 @@ the thread on every surface, including Android and iOS, which read the same OCS
 subject. The hot patch and its "re-run after every Talk update" footgun go away.
 Changes arrive through the release path with a diff, a review and a rollback,
 instead of by `docker cp`.
+
+**Does not buy, yet.** Four of the ten reported gaps (pin, label, search,
+per-thread unread) are backlog. `clavis-deploy#22` is not closed by this ADR and
+should not be reported to the customer as closed.
 
 **Costs.** Every Talk security release now needs a rebase before it reaches a
 customer, and until it does, customers run a Talk we have to patch ourselves.
