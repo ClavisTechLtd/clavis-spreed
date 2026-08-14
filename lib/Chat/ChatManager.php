@@ -930,8 +930,18 @@ class ChatManager {
 		// Story 1.7, AC1, AC4, AC7: the third enforcement seam - evaluated
 		// first, before the not-pinned no-op check, so a Locked thread
 		// always refuses the attempt uniformly.
-		$threadId = (int)$comment->getTopmostParentId() ?: (int)$comment->getId();
-		$this->threadService->ensureNotLocked($chat->getId(), $threadId);
+		//
+		// $participant is null only for {@see \OCA\Talk\BackgroundJob\UnpinMessage},
+		// the timer that expires a `pinUntil` a moderator already set - the
+		// counterpart pinMessage() takes a non-nullable Participant, so null
+		// here means "no one is writing, the system is finishing". FR-5
+		// refuses writes *by participants*; applying it to the timer would
+		// throw out of a QueuedJob that is then discarded, leaving the
+		// message pinned forever and last_pinned_id never reset.
+		if ($participant instanceof Participant) {
+			$threadId = (int)$comment->getTopmostParentId() ?: (int)$comment->getId();
+			$this->threadService->ensureNotLocked($chat->getId(), $threadId);
+		}
 
 		$metaData = $comment->getMetaData() ?? [];
 

@@ -450,6 +450,13 @@ class ChatController extends AEnvironmentAwareOCSController {
 			return new DataResponse(['error' => 'message'], Http::STATUS_REQUEST_ENTITY_TOO_LARGE);
 		} catch (IRateLimitExceededException) {
 			return new DataResponse(['error' => 'mentions'], Http::STATUS_TOO_MANY_REQUESTS);
+		} catch (LockedException $e) {
+			// AD-4: the plain "reply into a Locked Thread" case is the most
+			// frequent one, and without this catch the generic handler below
+			// would flatten it into 'message' - indistinguishable from a
+			// malformed send. Every other endpoint this story touches already
+			// reports 'locked'; this one must too.
+			return new DataResponse(['error' => $e->getReason()], Http::STATUS_BAD_REQUEST);
 		} catch (\Exception $e) {
 			$this->logger->warning($e->getMessage());
 			return new DataResponse(['error' => 'message'], Http::STATUS_BAD_REQUEST);

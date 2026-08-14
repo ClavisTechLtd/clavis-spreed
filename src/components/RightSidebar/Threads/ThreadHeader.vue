@@ -224,6 +224,10 @@ async function reopenThread() {
  */
 async function lockThread() {
 	const reason = await chatExtrasStore.promptLockThreadReason()
+	if (reason === null) {
+		// Dismissed. An empty string is a lock with no reason, not a cancel.
+		return
+	}
 	await chatExtrasStore.changeThreadState(token.value, threadId.value, THREAD.STATE.LOCKED, reason)
 }
 </script>

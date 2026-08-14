@@ -457,14 +457,32 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 	 * via capabilities (AD-9 Consistency Convention), stated in the
 	 * field's label rather than restated as a client literal.
 	 *
-	 * Note: mirrors renameThread()'s ConfirmDialog shape above. For an
-	 * `isForm` dialog, ConfirmDialog.vue resolves with the current input
-	 * value regardless of which button closes it - there is no distinct
-	 * "cancelled" outcome, exactly as renameThread()'s "Dismiss" button
-	 * already behaves today. Closing with an empty field is exactly
-	 * AC11's "no reason" case, not an error.
+	 * Returns `null` when the moderator backed out, and a string - possibly
+	 * empty, which is AC11's "no reason" case - when they confirmed.
+	 *
+	 * The distinction has to be made here rather than read off the resolved
+	 * value. For an `isForm` dialog, ConfirmDialog.vue's onClosing() submits
+	 * the current input value on *every* close, including Escape, the X and
+	 * a click outside, so the promise always resolves with a string. The
+	 * other `isForm` callers in this app (rename thread, create/rename tag)
+	 * are unharmed by that because they guard with `if (!name)` and an empty
+	 * name is not actionable. An empty lock *reason* is actionable - it
+	 * locks the thread - so the same shape would mean dismissing the dialog
+	 * locks the thread. Track confirmation in the button callbacks instead,
+	 * which run only when a button is actually pressed.
+	 *
+	 * Deliberately not fixed inside ConfirmDialog.vue: it is upstream and
+	 * shared with three other flows whose contract depends on the current
+	 * behaviour.
+	 *
+	 * Known limitation: pressing Enter in the field goes through
+	 * NcTextField's own `@keydown.enter` handler, which closes the dialog
+	 * without running any button callback, so it reads as a dismissal. That
+	 * fails closed - the thread stays unlocked and the moderator presses
+	 * "Lock" - which is the right way round for a moderation action.
 	 */
-	async function promptLockThreadReason(): Promise<string> {
+	async function promptLockThreadReason(): Promise<string | null> {
+		let confirmed = false
 		const lockReasonMaxLength = getTalkConfig('local', 'threads', 'lock-reason-length') || 4000
 
 		const reason = await spawnDialog(ConfirmDialog, {
@@ -477,15 +495,24 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 			buttons: [
 				{
 					label: t('spreed', 'Dismiss'),
-					callback: () => undefined,
+					variant: 'tertiary',
+					callback: () => {
+						confirmed = false
+					},
 				},
 				{
 					label: t('spreed', 'Lock'),
 					variant: 'primary',
-					callback: () => true,
+					callback: () => {
+						confirmed = true
+					},
 				},
 			],
 		})
+
+		if (!confirmed) {
+			return null
+		}
 
 		return typeof reason === 'string' ? reason : ''
 	}

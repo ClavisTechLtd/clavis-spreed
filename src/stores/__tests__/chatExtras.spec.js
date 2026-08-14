@@ -348,10 +348,27 @@ describe('chatExtrasStore', () => {
 			consoleErrorMock.mockRestore()
 		})
 
+		/**
+		 * Presses one of the dialog's buttons, which is the only thing that
+		 * distinguishes a confirmation from a dismissal: ConfirmDialog resolves
+		 * an isForm dialog with the input value however it was closed.
+		 *
+		 * @param {number} index button to press, or -1 to close without pressing one
+		 * @param {*} resolved what the dialog promise resolves with
+		 */
+		function mockDialog(index, resolved) {
+			spawnDialog.mockImplementationOnce((component, props) => {
+				if (index >= 0) {
+					props.buttons[index].callback()
+				}
+				return Promise.resolve(resolved)
+			})
+		}
+
 		it('prompts for a lock reason using the published capability bound (AC11: the bound is one server-side constant, not restated in the interface)', async () => {
 			// Arrange
 			getTalkConfig.mockReturnValueOnce(4000)
-			spawnDialog.mockResolvedValueOnce('Repeated off-topic discussion')
+			mockDialog(1, 'Repeated off-topic discussion')
 
 			// Act
 			const reason = await chatExtrasStore.promptLockThreadReason()
@@ -361,16 +378,41 @@ describe('chatExtrasStore', () => {
 			expect(reason).toBe('Repeated off-topic discussion')
 		})
 
-		it('treats a non-string dialog result as no reason, not an error (AC11)', async () => {
+		it('treats a confirmed empty field as no reason, not an error (AC11)', async () => {
 			// Arrange
 			getTalkConfig.mockReturnValueOnce(4000)
-			spawnDialog.mockResolvedValueOnce(undefined)
+			mockDialog(1, '')
+
+			// Act
+			const reason = await chatExtrasStore.promptLockThreadReason()
+
+			// Assert - an empty string locks with no reason
+			expect(reason).toBe('')
+		})
+
+		it('reports a dismissal distinctly from an empty reason, so backing out does not lock the thread', async () => {
+			// Arrange - ConfirmDialog resolves an isForm dialog with the input
+			// value even when dismissed, so the resolved value cannot be trusted
+			getTalkConfig.mockReturnValueOnce(4000)
+			mockDialog(0, 'half-typed reason')
 
 			// Act
 			const reason = await chatExtrasStore.promptLockThreadReason()
 
 			// Assert
-			expect(reason).toBe('')
+			expect(reason).toBeNull()
+		})
+
+		it('reports Escape and click-outside as a dismissal too (no button pressed)', async () => {
+			// Arrange
+			getTalkConfig.mockReturnValueOnce(4000)
+			mockDialog(-1, '')
+
+			// Act
+			const reason = await chatExtrasStore.promptLockThreadReason()
+
+			// Assert
+			expect(reason).toBeNull()
 		})
 	})
 
