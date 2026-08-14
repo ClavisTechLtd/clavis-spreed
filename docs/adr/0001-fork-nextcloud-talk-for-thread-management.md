@@ -101,9 +101,12 @@ bind-mounted read-only over `custom_apps/spreed`, the same shape as
 `clavis_cloud` and `auto_groups`. This does not conflict with handbook ADR 0008:
 that ADR forbids bind-mounting files a container's *entrypoint* writes, and the
 NextCloud image's entrypoint excludes `/var/www/html/custom_apps/` from its
-rsync. The mount is read-only on purpose, so that an appstore update of Talk
-fails loudly instead of silently reverting Clavis code — the exact defect the hot
-patch has today.
+rsync. The mount is read-only on purpose: every write into the app directory
+fails with `Read-only file system` (verified by probe), so an appstore update
+cannot silently revert Clavis code the way the hot patch is reverted today. What
+has *not* been demonstrated end-to-end is the updater's own error path, because
+no newer Talk than the forked version has been published to trigger it — the
+guarantee rests on the mount, not on a tested code path in the updater.
 
 **`clavis_talk_threads` is retired**, and this costs capability in the short
 term. The two implementations overlap on thread state, which is the part that
@@ -139,6 +142,31 @@ This is precisely the cost ADR 0002 exists to avoid, accepted here with the
 scope and the sync procedure above as the containment. The fork is also large:
 the build produces ~54 MB of assets that must be built, streamed and mounted,
 where `auto_groups` is 604 KB.
+
+**Rollback is not just removing the mount — the schema has to go back too.**
+Established by rehearsal on staging, not by reasoning: with the mount removed,
+the App Store build of Talk hydrates `oc_talk_threads` rows through
+`Entity::fromRow()`, hits the `state` column its `Thread` entity does not
+declare, and throws `BadFunctionCallException: state is not a valid attribute`.
+Every Talk request that touches a thread returns HTTP 500. The columns this fork
+adds are additive to *its own* code and actively fatal to upstream's. The
+verified procedure is therefore:
+
+1. Remove the bind-mount from `docker-compose.yml`.
+2. `ALTER TABLE oc_talk_threads DROP COLUMN state, DROP COLUMN lock_reason;`
+   — this **discards every thread's state and lock reason**, which is
+   acceptable only because the build being rolled back to cannot read them.
+3. `docker compose up -d nextcloud` (recreate; a restart does not re-evaluate
+   mounts), then verify Talk answers.
+
+Re-applying the fork afterwards needs the migrations forced back through
+`occ config:app:set spreed installed_version --value <lower>` + `occ upgrade`,
+because `occ upgrade` alone is a no-op once the recorded version already matches.
+
+**`occ upgrade` is not inert.** During the rehearsal it also pulled App Store
+updates for `spreed`, `mail`, `oidc` and `tasks`. The App Store copy sitting
+underneath the bind-mount is therefore not frozen at the version that was there
+before the deploy, and "roll back to what was running" cannot be assumed.
 
 **Risks and what to watch.**
 - **Rebase debt is silent until it is expensive.** The tripwire is the
