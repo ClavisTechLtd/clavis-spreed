@@ -932,9 +932,10 @@ class ChatControllerTest extends TestCase {
 	 * refused with the distinguishable 'locked' identifier.
 	 */
 	public function testDeleteMessageRefusesLockedThread(): void {
-		$attendee = $this->createMock(Attendee::class);
-		$attendee->method('getActorType')->willReturn(Attendee::ACTOR_USERS);
-		$attendee->method('getActorId')->willReturn($this->userId);
+		// Attendee's getters come from Entity::__call and cannot be stubbed.
+		$attendee = new Attendee();
+		$attendee->setActorType(Attendee::ACTOR_USERS);
+		$attendee->setActorId($this->userId);
 
 		$participant = $this->createMock(Participant::class);
 		$participant->method('getAttendee')->willReturn($attendee);
@@ -966,9 +967,10 @@ class ChatControllerTest extends TestCase {
 	 * \InvalidArgumentException fallback.
 	 */
 	public function testEditMessageRefusesLockedThread(): void {
-		$attendee = $this->createMock(Attendee::class);
-		$attendee->method('getActorType')->willReturn(Attendee::ACTOR_USERS);
-		$attendee->method('getActorId')->willReturn($this->userId);
+		// Attendee's getters come from Entity::__call and cannot be stubbed.
+		$attendee = new Attendee();
+		$attendee->setActorType(Attendee::ACTOR_USERS);
+		$attendee->setActorId($this->userId);
 
 		$participant = $this->createMock(Participant::class);
 		$participant->method('getAttendee')->willReturn($attendee);

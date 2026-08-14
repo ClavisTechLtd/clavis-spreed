@@ -450,15 +450,15 @@ class ListenerTest extends TestCase {
 		$comment->method('getTopmostParentId')->willReturn('55');
 		$comment->method('getId')->willReturn(55);
 
-		$thread = $this->createConfiguredMock(Thread::class, [
-			'getId' => 55,
-			'getName' => 'General discussion',
-			'getLastMessageId' => 60,
-			'getLastActivity' => null,
-			'getNumReplies' => 3,
-			'getState' => Thread::STATE_CLOSED,
-			'getLockReason' => null,
-		]);
+		// Only getName() is a real method on Thread; every other getter comes
+		// from Entity::__call and cannot be stubbed, so use a real entity.
+		$thread = new Thread();
+		$thread->setId(55);
+		$thread->setName('General discussion');
+		$thread->setLastMessageId(60);
+		$thread->setNumReplies(3);
+		$thread->setState(Thread::STATE_CLOSED);
+		$thread->setLockReason(null);
 		$this->threadService->method('findByThreadId')->willReturn($thread);
 
 		$l10n = $this->createMock(IL10N::class);

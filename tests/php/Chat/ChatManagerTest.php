@@ -461,6 +461,13 @@ class ChatManagerTest extends TestCase {
 			'topmostParentId' => '0',
 		]);
 
+		// The comment object is built before the lock is checked; the refusal
+		// this test asserts is save() never happening, not create().
+		$this->commentsManager->method('create')->willReturn($this->newCommentFromArray([
+			'id' => '24',
+			'parentId' => '0',
+		]));
+
 		$chat = $this->createMock(Room::class);
 		$chat->method('getId')->willReturn(1234);
 
@@ -483,6 +490,11 @@ class ChatManagerTest extends TestCase {
 	 */
 	public function testSendMessageRefusesExplicitThreadIdIntoLockedThread(): void {
 		$creationDateTime = new \DateTime();
+
+		$this->commentsManager->method('create')->willReturn($this->newCommentFromArray([
+			'id' => '99',
+			'parentId' => '0',
+		]));
 
 		$chat = $this->createMock(Room::class);
 		$chat->method('getId')->willReturn(1234);
@@ -747,6 +759,11 @@ class ChatManagerTest extends TestCase {
 	public function testAddSystemMessageRefusesObjectSharedIntoLockedThread(): void {
 		$creationDateTime = new \DateTime();
 
+		$this->commentsManager->method('create')->willReturn($this->newCommentFromArray([
+			'id' => '99',
+			'parentId' => '0',
+		]));
+
 		$chat = $this->createMock(Room::class);
 		$chat->method('getId')->willReturn(1234);
 		$chat->method('getToken')->willReturn('token1234');
@@ -771,6 +788,11 @@ class ChatManagerTest extends TestCase {
 			'id' => '55',
 			'topmostParentId' => '0',
 		]);
+
+		$this->commentsManager->method('create')->willReturn($this->newCommentFromArray([
+			'id' => '99',
+			'parentId' => '0',
+		]));
 
 		$chat = $this->createMock(Room::class);
 		$chat->method('getId')->willReturn(1234);
@@ -1338,9 +1360,10 @@ class ChatManagerTest extends TestCase {
 		$chat = $this->createMock(Room::class);
 		$chat->method('getId')->willReturn(1234);
 
-		$attendee = $this->createMock(Attendee::class);
-		$attendee->method('getActorType')->willReturn(Attendee::ACTOR_USERS);
-		$attendee->method('getActorId')->willReturn('user1');
+		// Attendee's getters come from Entity::__call and cannot be stubbed.
+		$attendee = new Attendee();
+		$attendee->setActorType(Attendee::ACTOR_USERS);
+		$attendee->setActorId('user1');
 		$participant = $this->createMock(Participant::class);
 		$participant->method('getAttendee')->willReturn($attendee);
 
