@@ -13,6 +13,7 @@ import {
 	ATTENDEE,
 	CHAT,
 	MESSAGE,
+	THREAD,
 } from '../constants.ts'
 import {
 	fetchNoteToSelfConversation,
@@ -30,6 +31,7 @@ import {
 } from '../services/messagesService.ts'
 import { useActorStore } from '../stores/actor.ts'
 import { useChatStore } from '../stores/chat.ts'
+import { useChatExtrasStore } from '../stores/chatExtras.ts'
 import { useGuestNameStore } from '../stores/guestName.ts'
 import { useReactionsStore } from '../stores/reactions.js'
 import { generateOCSErrorResponse, generateOCSResponse } from '../test-helpers.js'
@@ -253,6 +255,107 @@ describe('messagesStore', () => {
 				...message2.parent,
 				parent: message1.parent,
 			}, message2])
+		})
+
+		// Story 1.8, AC8/AC9: thread_closed/thread_locked/thread_reopened/
+		// thread_unlocked are not in SYSTEM_MESSAGE_TYPE_HIDDEN (Story 1.4 -
+		// they render as chat bubbles), so they never reach the
+		// THREAD_CREATED/THREAD_RENAMED special-casing above and instead
+		// fall through to the generic "Update threads" block, which must
+		// refresh state/lockReason for an already-known Thread rather than
+		// silently leaving other surfaces showing a stale state.
+		describe('thread lifecycle relay (Story 1.8, AC8/AC9)', () => {
+			const THREAD_ID = 42
+
+			/** @type {import('pinia').Store} */
+			let chatExtrasStore
+			let fetchSingleThreadSpy
+
+			beforeEach(() => {
+				chatExtrasStore = useChatExtrasStore()
+				fetchSingleThreadSpy = vi.spyOn(chatExtrasStore, 'fetchSingleThread').mockResolvedValue(undefined)
+			})
+
+			/**
+			 * Seeds a known Thread in chatExtrasStore, matching the minimal
+			 * shape `processMessage`'s "Update threads" block reads from.
+			 */
+			function seedKnownThread() {
+				chatExtrasStore.addThread(TOKEN, {
+					thread: {
+						id: THREAD_ID,
+						roomToken: TOKEN,
+						title: 'Existing title',
+						numReplies: 1,
+						lastMessageId: 10,
+						lastActivity: 100,
+						state: THREAD.STATE.ONGOING,
+						lockReason: null,
+					},
+					attendee: { notificationLevel: 1 },
+					canManage: true,
+					first: null,
+					last: null,
+				})
+			}
+
+			it.each([
+				MESSAGE.SYSTEM_TYPE.THREAD_CLOSED,
+				MESSAGE.SYSTEM_TYPE.THREAD_LOCKED,
+				MESSAGE.SYSTEM_TYPE.THREAD_REOPENED,
+				MESSAGE.SYSTEM_TYPE.THREAD_UNLOCKED,
+			])('re-fetches an already-known Thread when a %s message arrives', (systemMessage) => {
+				seedKnownThread()
+
+				const message = {
+					id: 20,
+					token: TOKEN,
+					threadId: THREAD_ID,
+					isThread: true,
+					systemMessage,
+					timestamp: 200,
+				}
+
+				store.dispatch('processMessage', { token: TOKEN, message })
+
+				expect(fetchSingleThreadSpy).toHaveBeenCalledExactlyOnceWith(TOKEN, THREAD_ID)
+			})
+
+			it('does not double-fetch when the Thread is unknown - the existing !thread branch already handles it', () => {
+				const message = {
+					id: 20,
+					token: TOKEN,
+					threadId: THREAD_ID,
+					isThread: true,
+					systemMessage: MESSAGE.SYSTEM_TYPE.THREAD_CLOSED,
+					timestamp: 200,
+				}
+
+				store.dispatch('processMessage', { token: TOKEN, message })
+
+				expect(fetchSingleThreadSpy).toHaveBeenCalledExactlyOnceWith(TOKEN, THREAD_ID)
+			})
+
+			it('leaves a plain thread reply (no lifecycle systemMessage) on the existing diff-based update path', () => {
+				seedKnownThread()
+
+				const message = {
+					id: 20,
+					token: TOKEN,
+					threadId: THREAD_ID,
+					isThread: true,
+					threadTitle: 'Existing title',
+					threadReplies: 1,
+					timestamp: 200,
+				}
+
+				store.dispatch('processMessage', { token: TOKEN, message })
+
+				// Nothing changed (title/numReplies/lastMessageId all match
+				// the seeded Thread) and this is not a lifecycle verb, so
+				// neither branch of the "Update threads" block fires.
+				expect(fetchSingleThreadSpy).not.toHaveBeenCalled()
+			})
 		})
 	})
 

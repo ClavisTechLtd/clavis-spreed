@@ -151,7 +151,10 @@ class ScheduledMessageService {
 			$entity = [];
 			foreach ($row as $field => $value) {
 				if (str_starts_with((string)$field, 'th_')) {
-					$thread[substr((string)$field, 3)] = $value;
+					// Keep the th_-prefixed keys as-is: Thread::createFromRow()
+					// expects the same convention SelectHelper::selectThreadsTable()
+					// produces (AD-1), so the sub-array is handed to it unchanged.
+					$thread[(string)$field] = $value;
 					continue;
 				}
 				$entity[$field] = $value;
@@ -162,10 +165,10 @@ class ScheduledMessageService {
 				$parent = $this->messageParser->createMessage($chat, $participant, $comments[$entity['parent_id']], $this->l);
 				$this->messageParser->parseMessage($parent);
 			}
-			if (in_array($thread['id'], [null, Thread::THREAD_NONE, Thread::THREAD_CREATE], true)) {
+			if (in_array($thread['th_id'] ?? null, [null, Thread::THREAD_NONE, Thread::THREAD_CREATE], true)) {
 				$thread = null;
 			} else {
-				$thread = Thread::fromRow($thread);
+				$thread = Thread::createFromRow($thread);
 			}
 			$messages[] = $this->parseScheduledMessage($format, $scheduleMessage, $parent, $thread);
 		}

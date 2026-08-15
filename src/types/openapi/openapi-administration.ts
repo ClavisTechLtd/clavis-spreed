@@ -373,6 +373,13 @@ export type components = {
                      */
                     "group-mode": "none" | "group-first" | "private-first";
                 };
+                threads: {
+                    /**
+                     * Format: int64
+                     * @description Maximum length of a Thread's lock reason
+                     */
+                    "lock-reason-length": number;
+                };
                 federation: {
                     /** @description Whether federation is enabled */
                     enabled: boolean;

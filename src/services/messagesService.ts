@@ -38,6 +38,8 @@ import type {
 	setReadMarkerResponse,
 	setThreadNotificationLevelParams,
 	setThreadNotificationLevelResponse,
+	setThreadStateParams,
+	setThreadStateResponse,
 	summarizeChatParams,
 	summarizeChatResponse,
 	unpinMessageResponse,
@@ -394,6 +396,22 @@ async function renameThread(token: string, threadId: number, threadTitle: string
 }
 
 /**
+ * Change the lifecycle state of a thread (Story 1.4)
+ *
+ * @param token the conversation token
+ * @param threadId The thread id to change the state for
+ * @param state The new state (see THREAD.STATE)
+ * @param [reason] Optional reason, only meaningful when locking
+ * @param [options] Axios request options
+ */
+async function setThreadState(token: string, threadId: number, state: number, reason?: string, options?: AxiosRequestConfig): setThreadStateResponse {
+	return axios.put(generateOcsUrl('apps/spreed/api/v1/chat/{token}/threads/{threadId}/state', { token, threadId }), {
+		state,
+		reason,
+	} as setThreadStateParams, options)
+}
+
+/**
  * Get a list of scheduled messages of this user for given conversation
  *
  * @param token the conversation token
@@ -495,6 +513,7 @@ export {
 	scheduleMessage,
 	setConversationUnread,
 	setThreadNotificationLevel,
+	setThreadState,
 	summarizeChat,
 	unpinMessage,
 	updateLastReadMessage,

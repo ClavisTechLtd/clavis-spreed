@@ -53,6 +53,7 @@
                             "call",
                             "chat",
                             "conversations",
+                            "threads",
                             "federation",
                             "previews",
                             "signaling",
@@ -341,6 +342,20 @@
                                             "private-first"
                                         ],
                                         "description": "User selected grouping mode for conversations (see [constants list](https://nextcloud-talk.readthedocs.io/en/latest/constants#conversations-group-mode))"
+                                    }
+                                }
+                            },
+                            "threads": {
+                                "type": "object",
+                                "required": [
+                                    "lock-reason-length"
+                                ],
+                                "properties": {
+                                    "lock-reason-length": {
+                                        "type": "integer",
+                                        "format": "int64",
+                                        "description": "Maximum length of a Thread's lock reason",
+                                        "minimum": 1
                                     }
                                 }
                             },

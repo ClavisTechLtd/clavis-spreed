@@ -734,6 +734,10 @@ namespace OCA\Talk;
  *     lastActivity: non-negative-int,
  *     // Number of replies in the thread
  *     numReplies: non-negative-int,
+ *     // State of the thread (`0` Ongoing, `1` Closed, `2` Locked)
+ *     state: 0|1|2,
+ *     // Optional reason given when the thread was last locked, null when none was given or the thread was never locked
+ *     lockReason: ?string,
  * }
  *
  * @psalm-type TalkThreadAttendee = array{
@@ -746,6 +750,8 @@ namespace OCA\Talk;
  *      thread: TalkThread,
  *      // Attendee details for the current user in this thread
  *      attendee: TalkThreadAttendee,
+ *      // Whether the current actor may manage this thread (change its state, feature it, or edit its tags)
+ *      canManage: bool,
  *      // First message in the thread (root message)
  *      first: ?TalkChatMessage,
  *      // Last message in the thread
@@ -851,6 +857,10 @@ namespace OCA\Talk;
  *             sort-order: 'activity'|'alphabetical',
  *             // User selected grouping mode for conversations (see [constants list](https://nextcloud-talk.readthedocs.io/en/latest/constants#conversations-group-mode))
  *             group-mode: 'none'|'group-first'|'private-first',
+ *         },
+ *         threads: array{
+ *             // Maximum length of a Thread's lock reason
+ *             lock-reason-length: positive-int,
  *         },
  *         federation: array{
  *             // Whether federation is enabled

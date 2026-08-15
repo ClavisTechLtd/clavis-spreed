@@ -25,6 +25,7 @@ use OCA\Talk\Events\ParticipantModifiedEvent;
 use OCA\Talk\Events\RoomCreatedEvent;
 use OCA\Talk\Events\RoomModifiedEvent;
 use OCA\Talk\Exceptions\ParticipantNotFoundException;
+use OCA\Talk\Exceptions\RoomNotFoundException;
 use OCA\Talk\Manager;
 use OCA\Talk\Model\Attendee;
 use OCA\Talk\Model\BreakoutRoom;
@@ -116,6 +117,7 @@ class Listener implements IEventListener {
 				default => null,
 			};
 		} elseif ($event instanceof BeforeShareCreatedEvent) {
+			$this->refuseShareIntoLockedThread($event);
 			$this->setShareExpiration($event);
 		} elseif ($event instanceof BeforeDuplicateShareSentEvent || $event instanceof ShareCreatedEvent) {
 			$share = $event->getShare();
@@ -368,6 +370,68 @@ class Listener implements IEventListener {
 		} elseif ($event->getNewValue() === Participant::GUEST) {
 			$this->sendSystemMessage($room, 'guest_moderator_demoted', ['type' => $attendee->getActorType(), 'id' => $attendee->getActorId()]);
 		}
+	}
+
+	/**
+	 * Story 1.6, AC6/AC11: the file-share path's pre-flight lock guard.
+	 *
+	 * The `file_shared` system message is posted from {@see
+	 * self::fixMimeTypeOfVoiceMessage()}, which runs on ShareCreatedEvent —
+	 * *after* `Manager::createShare()` has persisted the share
+	 * (`lib/private/Share20/Manager.php`: the pre-share event is dispatched at
+	 * the line before `$provider->create($share)`). Letting
+	 * {@see ChatManager::addSystemMessage()}'s guard be the one that refuses
+	 * would therefore leave the room share committed with no chat message
+	 * naming it — an orphaned side effect, and a 500 instead of a refusal.
+	 *
+	 * So refuse here, on the *before* event, where nothing has been written
+	 * yet. LockedException extends \InvalidArgumentException, which
+	 * `ShareAPIController::createShare()` already maps to an OCSForbiddenException
+	 * carrying the reason, so the client sees 'locked' rather than a generic
+	 * failure.
+	 *
+	 * Reachable from the Talk web client: NewMessage.vue puts `threadId` into
+	 * `talkMetaData` for the "share from Files" flow, which posts to the
+	 * classic files_sharing endpoint rather than to Talk's own attachment
+	 * endpoint.
+	 */
+	protected function refuseShareIntoLockedThread(BeforeShareCreatedEvent $event): void {
+		$share = $event->getShare();
+
+		if ($share->getShareType() !== IShare::TYPE_ROOM) {
+			return;
+		}
+
+		// Same two exclusions as setShareExpiration(): both endpoints create a
+		// folder-level share for access control only, and the attachment
+		// endpoint runs its own pre-flight guard before it gets here.
+		$route = strtolower($this->request->getParam('_route') ?? '');
+		if ($route === 'ocs.spreed.chat.postattachmenttoroom'
+			|| $route === 'ocs.spreed.chat.probeattachmentfolder') {
+			return;
+		}
+
+		$metaData = json_decode((string)($this->request->getParam('talkMetaData') ?? ''), true);
+		if (!is_array($metaData) || !isset($metaData['threadId'])) {
+			return;
+		}
+
+		$threadId = (int)$metaData['threadId'];
+		if ($threadId <= 0) {
+			return;
+		}
+
+		try {
+			$room = $this->manager->getRoomByToken($share->getSharedWith());
+		} catch (RoomNotFoundException) {
+			// Not a room this app knows; leave the share alone rather than
+			// failing an unrelated one from a guard that does not apply.
+			return;
+		}
+
+		// Throws LockedException; a stale or foreign thread id is a no-op here,
+		// exactly as it is on every other write path.
+		$this->threadService->ensureNotLocked($room->getId(), $threadId);
 	}
 
 	protected function setShareExpiration(BeforeShareCreatedEvent $event): void {

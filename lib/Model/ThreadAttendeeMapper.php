@@ -38,6 +38,30 @@ class ThreadAttendeeMapper extends QBMapper {
 	}
 
 	/**
+	 * Story 1.10, AC2: deletes the per-attendee rows for Threads the reaper
+	 * removed. Index-backed by `tta_throom_attendee`'s `thread_id`-leading
+	 * unique constraint (Version22001Date20250927174738), so this `IN`
+	 * delete does not require a new migration.
+	 *
+	 * @param list<int> $threadIds
+	 */
+	public function deleteByThreadIds(array $threadIds): int {
+		if ($threadIds === []) {
+			return 0;
+		}
+
+		$query = $this->db->getQueryBuilder();
+		$query->delete($this->getTableName())
+			->where($query->expr()->in(
+				'thread_id',
+				$query->createNamedParameter($threadIds, IQueryBuilder::PARAM_INT_ARRAY),
+				IQueryBuilder::PARAM_INT_ARRAY,
+			));
+
+		return $query->executeStatement();
+	}
+
+	/**
 	 * @param list<int> $threadIds
 	 * @return list<ThreadAttendee>
 	 */

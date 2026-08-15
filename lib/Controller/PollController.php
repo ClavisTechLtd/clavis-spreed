@@ -12,6 +12,7 @@ namespace OCA\Talk\Controller;
 use JsonException;
 use OCA\Talk\Chat\ChatManager;
 use OCA\Talk\Exceptions\PollPropertyException;
+use OCA\Talk\Exceptions\ThreadProperty\LockedException;
 use OCA\Talk\Exceptions\WrongPermissionsException;
 use OCA\Talk\Middleware\Attribute\FederationSupported;
 use OCA\Talk\Middleware\Attribute\RequireModeratorOrNoLobby;
@@ -69,7 +70,7 @@ class PollController extends AEnvironmentAwareOCSController {
 	 * @param int $maxVotes Number of maximum votes per voter
 	 * @param bool $draft Whether the poll should be saved as a draft (only allowed for moderators and with `talk-polls-drafts` capability)
 	 * @param int $threadId Thread id which this poll should be posted into (also requires `threads` capability)
-	 * @return DataResponse<Http::STATUS_OK, TalkPollDraft, array{}>|DataResponse<Http::STATUS_CREATED, TalkPoll, array{}>|DataResponse<Http::STATUS_BAD_REQUEST, array{error: 'draft'|'options'|'poll'|'question'|'room'}, array{}>
+	 * @return DataResponse<Http::STATUS_OK, TalkPollDraft, array{}>|DataResponse<Http::STATUS_CREATED, TalkPoll, array{}>|DataResponse<Http::STATUS_BAD_REQUEST, array{error: 'draft'|'options'|'poll'|'question'|'room'|'locked'}, array{}>
 	 *
 	 * 200: Draft created successfully
 	 * 201: Poll created successfully
@@ -100,6 +101,27 @@ class PollController extends AEnvironmentAwareOCSController {
 
 		if ($draft === true && !$this->participant->hasModeratorPermissions()) {
 			return new DataResponse(['error' => PollPropertyException::REASON_DRAFT], Http::STATUS_BAD_REQUEST);
+		}
+
+		if (!$draft && $threadId !== 0) {
+			// Story 1.6, AC5, AC11: refuse before the poll entity is
+			// created, not after. PollService::createPoll() is a separate
+			// aggregate from the comment ChatManager::addSystemMessage()
+			// writes further below - by the time that call's own guard
+			// would fire, the poll already exists, and the try/catch
+			// around that call swallows every exception silently
+			// (returning success with an orphaned poll), which is exactly
+			// AC11's forbidden failure mode. Reuses the single shared
+			// decision (ThreadService::ensureNotLocked()); only this call
+			// site is additional pre-flight, documented in Dev Notes. A
+			// draft is never posted into a Thread at all (it returns
+			// before the threadId/addSystemMessage block below), so it is
+			// exempt from this check.
+			try {
+				$this->threadService->ensureNotLocked($this->room->getId(), $threadId);
+			} catch (LockedException $e) {
+				return new DataResponse(['error' => $e->getReason()], Http::STATUS_BAD_REQUEST);
+			}
 		}
 
 		$attendee = $this->participant->getAttendee();

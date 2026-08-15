@@ -22,3 +22,18 @@ export type ApiErrorResponse<T = null> = AxiosError<{
 export function isAxiosErrorResponse<T = null>(exception: unknown): exception is ApiErrorResponse<T> {
 	return exception !== null && typeof exception === 'object' && 'response' in exception
 }
+
+/**
+ * Whether a caught exception is the OCS "Thread not found" 404 response
+ * (Story 1.9, AC4) - the identifier `ChatController::getMessageContext()`
+ * and `::receiveMessages()` both already return (`DataResponse(['error' =>
+ * 'thread'], Http::STATUS_NOT_FOUND)`) when a `threadId` no longer
+ * validates (deleted, expired, or never existed).
+ *
+ * @param exception - exception (from catch block) to be verified
+ */
+export function isThreadNotFoundError(exception: unknown): boolean {
+	return isAxiosErrorResponse<{ error?: string }>(exception)
+		&& exception.response?.status === 404
+		&& exception.response?.data?.ocs?.data?.error === 'thread'
+}

@@ -419,6 +419,76 @@ class ListenerTest extends TestCase {
 		$this->listener->handle($event);
 	}
 
+	/**
+	 * Story 1.4, AC6, AC16: the four lifecycle verbs are exempt from the
+	 * skip-last-activity early return (AD-14 registry site 2, alongside
+	 * thread_created/thread_renamed) - a lifecycle transition always
+	 * relays live even though it does not bump the room's last-message
+	 * pointer - and the relayed threadInfo payload carries `state`
+	 * (Task 7.6's fix to a pre-existing gap this story surfaces).
+	 */
+	public static function dataThreadLifecycleMessageTypes(): array {
+		return [
+			['thread_closed'],
+			['thread_locked'],
+			['thread_reopened'],
+			['thread_unlocked'],
+		];
+	}
+
+	#[DataProvider('dataThreadLifecycleMessageTypes')]
+	public function testSystemMessageSentEventThreadLifecycleVerbsRelayDespiteSkippingUpdate(string $messageType): void {
+		$room = $this->createMock(Room::class);
+		$room->method('getId')->willReturn(1);
+		$room->method('getToken')->willReturn('token123');
+
+		$comment = $this->createMock(IComment::class);
+		$comment->method('getMessage')->willReturn(json_encode([
+			'message' => $messageType,
+			'parameters' => ['thread' => 55, 'title' => 'General discussion'],
+		]));
+		$comment->method('getTopmostParentId')->willReturn('55');
+		$comment->method('getId')->willReturn(55);
+
+		// Only getName() is a real method on Thread; every other getter comes
+		// from Entity::__call and cannot be stubbed, so use a real entity.
+		$thread = new Thread();
+		$thread->setId(55);
+		$thread->setName('General discussion');
+		$thread->setLastMessageId(60);
+		$thread->setNumReplies(3);
+		$thread->setState(Thread::STATE_CLOSED);
+		$thread->setLockReason(null);
+		$this->threadService->method('findByThreadId')->willReturn($thread);
+
+		$l10n = $this->createMock(IL10N::class);
+		$this->l10nFactory->method('get')->willReturn($l10n);
+
+		$message = $this->createConfiguredMock(Message::class, [
+			'getVisibility' => true,
+			'toArray' => ['id' => 55],
+		]);
+		$this->messageParser->method('createMessage')->willReturn($message);
+		$this->messageParser->method('parseMessage');
+
+		$this->participantService->method('getLastCommonReadChatMessage')->willReturn(0);
+
+		$event = new SystemMessageSentEvent(
+			$room,
+			$comment,
+			skipLastActivityUpdate: true,
+		);
+
+		$this->backendNotifier->expects($this->once())
+			->method('sendRoomMessage')
+			->with($room, $this->callback(static function (array $data): bool {
+				return array_key_exists('state', $data['chat']['comment']['threadInfo']['thread'] ?? [])
+					&& $data['chat']['comment']['threadInfo']['thread']['state'] === Thread::STATE_CLOSED;
+			}));
+
+		$this->listener->handle($event);
+	}
+
 	public function testSystemMessagesMultipleSentEvent(): void {
 		$room = $this->createMock(Room::class);
 		$comment = $this->createMock(IComment::class);

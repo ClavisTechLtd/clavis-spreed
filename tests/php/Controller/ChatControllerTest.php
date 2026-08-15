@@ -16,6 +16,7 @@ use OCA\Talk\Chat\Notifier;
 use OCA\Talk\Chat\ReactionManager;
 use OCA\Talk\Config;
 use OCA\Talk\Controller\ChatController;
+use OCA\Talk\Exceptions\ThreadProperty\LockedException;
 use OCA\Talk\GuestManager;
 use OCA\Talk\Manager;
 use OCA\Talk\MatterbridgeManager;
@@ -44,6 +45,9 @@ use OCP\Collaboration\AutoComplete\IManager;
 use OCP\Collaboration\Collaborators\ISearchResult;
 use OCP\Comments\IComment;
 use OCP\EventDispatcher\IEventDispatcher;
+use OCP\Files\FileInfo;
+use OCP\Files\Folder;
+use OCP\Files\Node;
 use OCP\IL10N;
 use OCP\IRequest;
 use OCP\IUser;
@@ -762,6 +766,285 @@ class ChatControllerTest extends TestCase {
 
 		$this->assertEquals($expected->getStatus(), $response->getStatus());
 		$this->assertEquals($expected->getData(), $response->getData());
+	}
+
+	/**
+	 * Story 1.6, AC3, AC5, AC11: sharing a rich object into a Locked
+	 * Thread is refused with a distinguishable 'locked' identifier,
+	 * rather than being swallowed into the generic 'message' identifier
+	 * the pre-existing catch-all would otherwise return.
+	 */
+	public function testShareObjectToChatByUserLockedThread(): void {
+		$participant = $this->createMock(Participant::class);
+
+		$this->avatarService->method('getAvatarUrl')
+			->with($this->room)
+			->willReturn('getAvatarUrl');
+
+		$richData = [
+			'call-type' => 'one2one',
+			'type' => 'call',
+			'id' => 'R4nd0mToken',
+			'icon-url' => '',
+		];
+
+		$this->timeFactory->method('getDateTime')->willReturn(new \DateTime());
+
+		$this->chatManager->expects($this->once())
+			->method('addSystemMessage')
+			->willThrowException(new LockedException(LockedException::REASON_LOCKED));
+
+		$this->controller->setRoom($this->room);
+		$this->controller->setParticipant($participant);
+		$response = $this->controller->shareObjectToChat($richData['type'], $richData['id'], json_encode(['call-type' => $richData['call-type']]));
+
+		$this->assertEquals(Http::STATUS_BAD_REQUEST, $response->getStatus());
+		$this->assertEquals(['error' => 'locked'], $response->getData());
+	}
+
+	/**
+	 * Story 1.6, AC7, AC11: an attachment uploaded into a Locked Thread is
+	 * refused *before* the file is moved out of the Draft folder -
+	 * finalizeUploadedFile() must never be reached.
+	 */
+	public function testPostAttachmentToRoomRefusesLockedThread(): void {
+		$this->talkConfig->method('isConversationSubfoldersEnabled')->willReturn(true);
+		$this->room->method('getId')->willReturn(1234);
+
+		$subfolder = $this->createMock(Folder::class);
+		$draftFolder = $this->createMock(Folder::class);
+		$draftFolder->method('getId')->willReturn(20);
+		$this->conversationFolderService->method('getOrCreateSubfolder')->willReturn($subfolder);
+		$this->conversationFolderService->method('getOrCreateDraftFolder')->willReturn($draftFolder);
+
+		$parent = $this->createMock(Folder::class);
+		$parent->method('getId')->willReturn(20);
+		$node = $this->createMock(Node::class);
+		$node->method('getType')->willReturn(FileInfo::TYPE_FILE);
+		$node->method('getParent')->willReturn($parent);
+		$this->conversationFolderService->method('getFileNode')->willReturn($node);
+
+		$this->threadService->method('validateThread')->with(1234, 42)->willReturn(true);
+		$this->threadService->method('ensureNotLocked')->with(1234, 42)
+			->willThrowException(new LockedException(LockedException::REASON_LOCKED));
+		$this->conversationFolderService->expects($this->never())->method('finalizeUploadedFile');
+
+		$this->controller->setRoom($this->room);
+		$this->controller->setParticipant($this->createMock(Participant::class));
+
+		$response = $this->controller->postAttachmentToRoom('Talk/room/Draft/file.jpg', '', json_encode(['threadId' => 42]));
+
+		$this->assertEquals(Http::STATUS_BAD_REQUEST, $response->getStatus());
+		$this->assertEquals(['error' => 'locked'], $response->getData());
+	}
+
+	/**
+	 * Story 1.6, AC7: a stale/foreign threadId in talkMetaData is
+	 * silently ignored (posts unthreaded) rather than refused - matches
+	 * the tolerant precedent every other path uses.
+	 */
+	public function testPostAttachmentToRoomIgnoresStaleThreadId(): void {
+		$this->talkConfig->method('isConversationSubfoldersEnabled')->willReturn(true);
+		$this->room->method('getId')->willReturn(1234);
+
+		$subfolder = $this->createMock(Folder::class);
+		$draftFolder = $this->createMock(Folder::class);
+		$draftFolder->method('getId')->willReturn(20);
+		$this->conversationFolderService->method('getOrCreateSubfolder')->willReturn($subfolder);
+		$this->conversationFolderService->method('getOrCreateDraftFolder')->willReturn($draftFolder);
+
+		$parent = $this->createMock(Folder::class);
+		$parent->method('getId')->willReturn(20);
+		$node = $this->createMock(Node::class);
+		$node->method('getType')->willReturn(FileInfo::TYPE_FILE);
+		$node->method('getParent')->willReturn($parent);
+		$node->method('getId')->willReturn(999);
+		$node->method('getName')->willReturn('file.jpg');
+		$node->method('getMimeType')->willReturn('image/jpeg');
+		$this->conversationFolderService->method('getFileNode')->willReturn($node);
+		$this->conversationFolderService->method('finalizeUploadedFile')->willReturn([
+			'from' => 'file.jpg',
+			'to' => 'file.jpg',
+			'node' => $node,
+		]);
+
+		$this->threadService->method('validateThread')->with(1234, 42)->willReturn(false);
+		$this->threadService->expects($this->never())->method('ensureNotLocked');
+
+		$comment = $this->createMock(IComment::class);
+		$comment->method('getId')->willReturn('99');
+		$this->chatManager->expects($this->once())
+			->method('addSystemMessage')
+			->with(
+				$this->room,
+				$this->anything(),
+				Attendee::ACTOR_USERS,
+				$this->userId,
+				$this->anything(),
+				$this->anything(),
+				true,
+				$this->anything(),
+				null,
+				false,
+				false,
+				0,
+			)
+			->willReturn($comment);
+
+		$this->controller->setRoom($this->room);
+		$this->controller->setParticipant($this->createMock(Participant::class));
+
+		$response = $this->controller->postAttachmentToRoom('Talk/room/Draft/file.jpg', '', json_encode(['threadId' => 42]));
+
+		$this->assertEquals(Http::STATUS_OK, $response->getStatus());
+	}
+
+	/**
+	 * Story 1.6, AC8: scheduling a message into a Thread that is Locked
+	 * at the moment of scheduling is refused at request time -
+	 * scheduling writes no comment at all, so this is a documented
+	 * second call site for the shared guard, and it must fire before
+	 * ScheduledMessageService::scheduleMessage() is ever called.
+	 */
+	public function testScheduleMessageRefusesLockedThread(): void {
+		$this->room->method('getId')->willReturn(1234);
+		$this->timeFactory->method('getTime')->willReturn(1000);
+
+		$this->threadService->method('validateThread')->with(1234, 42)->willReturn(true);
+		$this->threadService->method('ensureNotLocked')->with(1234, 42)
+			->willThrowException(new LockedException(LockedException::REASON_LOCKED));
+		$this->scheduledMessageService->expects($this->never())->method('scheduleMessage');
+
+		$participant = $this->createMock(Participant::class);
+		$participant->method('isSelfJoinedOrGuest')->willReturn(false);
+
+		$this->controller->setRoom($this->room);
+		$this->controller->setParticipant($participant);
+
+		$response = $this->controller->scheduleMessage('Message 1', 2000, threadId: 42);
+
+		$this->assertEquals(Http::STATUS_BAD_REQUEST, $response->getStatus());
+		$this->assertEquals(['error' => 'locked'], $response->getData());
+	}
+
+	/**
+	 * Story 1.7, AC3: deleting a message inside a Locked Thread is
+	 * refused with the distinguishable 'locked' identifier.
+	 */
+	public function testDeleteMessageRefusesLockedThread(): void {
+		// Attendee's getters come from Entity::__call and cannot be stubbed.
+		$attendee = new Attendee();
+		$attendee->setActorType(Attendee::ACTOR_USERS);
+		$attendee->setActorId($this->userId);
+
+		$participant = $this->createMock(Participant::class);
+		$participant->method('getAttendee')->willReturn($attendee);
+		$participant->method('hasModeratorPermissions')->willReturn(true);
+
+		$message = $this->createMock(IComment::class);
+		$message->method('getActorType')->willReturn(Attendee::ACTOR_USERS);
+		$message->method('getActorId')->willReturn($this->userId);
+		$message->method('getVerb')->willReturn(ChatManager::VERB_MESSAGE);
+
+		$this->chatManager->method('getComment')->willReturn($message);
+		$this->chatManager->expects($this->once())
+			->method('deleteMessage')
+			->willThrowException(new LockedException(LockedException::REASON_LOCKED));
+
+		$this->controller->setRoom($this->room);
+		$this->controller->setParticipant($participant);
+
+		$response = $this->controller->deleteMessage(55);
+
+		$this->assertEquals(Http::STATUS_BAD_REQUEST, $response->getStatus());
+		$this->assertEquals(['error' => 'locked'], $response->getData());
+	}
+
+	/**
+	 * Story 1.7, AC2: editing a message inside a Locked Thread is
+	 * refused with the distinguishable 'locked' identifier, via an
+	 * explicit catch (LockedException) placed ahead of the generic
+	 * \InvalidArgumentException fallback.
+	 */
+	public function testEditMessageRefusesLockedThread(): void {
+		// Attendee's getters come from Entity::__call and cannot be stubbed.
+		$attendee = new Attendee();
+		$attendee->setActorType(Attendee::ACTOR_USERS);
+		$attendee->setActorId($this->userId);
+
+		$participant = $this->createMock(Participant::class);
+		$participant->method('getAttendee')->willReturn($attendee);
+		$participant->method('hasModeratorPermissions')->willReturn(true);
+
+		$comment = $this->createMock(IComment::class);
+		$comment->method('getActorType')->willReturn(Attendee::ACTOR_USERS);
+		$comment->method('getActorId')->willReturn($this->userId);
+		$comment->method('getVerb')->willReturn(ChatManager::VERB_MESSAGE);
+		$comment->method('getCreationDateTime')->willReturn(new \DateTime());
+
+		$this->timeFactory->method('getDateTime')->willReturn(new \DateTime());
+
+		$this->chatManager->method('getComment')->willReturn($comment);
+		$this->chatManager->expects($this->once())
+			->method('editMessage')
+			->willThrowException(new LockedException(LockedException::REASON_LOCKED));
+
+		$this->controller->setRoom($this->room);
+		$this->controller->setParticipant($participant);
+
+		$response = $this->controller->editMessage(55, 'New message');
+
+		$this->assertEquals(Http::STATUS_BAD_REQUEST, $response->getStatus());
+		$this->assertEquals(['error' => 'locked'], $response->getData());
+	}
+
+	/**
+	 * Story 1.7, AC4: pinning a message inside a Locked Thread is
+	 * refused - pinMessage() had no try/catch at all before this story
+	 * (an uncaught LockedException would have surfaced as an unclean
+	 * 500).
+	 */
+	public function testPinMessageRefusesLockedThread(): void {
+		$comment = $this->createMock(IComment::class);
+		$comment->method('getVerb')->willReturn(ChatManager::VERB_MESSAGE);
+
+		$this->chatManager->method('getComment')->willReturn($comment);
+		$this->chatManager->expects($this->once())
+			->method('pinMessage')
+			->willThrowException(new LockedException(LockedException::REASON_LOCKED));
+
+		$participant = $this->createMock(Participant::class);
+
+		$this->controller->setRoom($this->room);
+		$this->controller->setParticipant($participant);
+
+		$response = $this->controller->pinMessage(55);
+
+		$this->assertEquals(Http::STATUS_BAD_REQUEST, $response->getStatus());
+		$this->assertEquals(['error' => 'locked'], $response->getData());
+	}
+
+	/**
+	 * Story 1.7, AC4: unpinning a message inside a Locked Thread is
+	 * refused - same previously-uncaught-exception gap as pinMessage().
+	 */
+	public function testUnpinMessageRefusesLockedThread(): void {
+		$comment = $this->createMock(IComment::class);
+
+		$this->chatManager->method('getComment')->willReturn($comment);
+		$this->chatManager->expects($this->once())
+			->method('unpinMessage')
+			->willThrowException(new LockedException(LockedException::REASON_LOCKED));
+
+		$participant = $this->createMock(Participant::class);
+
+		$this->controller->setRoom($this->room);
+		$this->controller->setParticipant($participant);
+
+		$response = $this->controller->unpinMessage(55);
+
+		$this->assertEquals(Http::STATUS_BAD_REQUEST, $response->getStatus());
+		$this->assertEquals(['error' => 'locked'], $response->getData());
 	}
 
 	public function testReceiveHistoryByUser(): void {

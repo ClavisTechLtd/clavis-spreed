@@ -2299,6 +2299,33 @@ class FeatureContext implements Context, SnippetAcceptingContext {
 		self::$threadIdToTitle[$threadId] = $newTitle;
 	}
 
+	/**
+	 * Story 1.6: Story 1.4's PUT .../threads/{id}/state endpoint has no
+	 * Behat step yet - added here so this story's Locked-thread scenarios
+	 * can set up their precondition. State is passed numerically
+	 * (Thread::STATE_ONGOING = 0, STATE_CLOSED = 1, STATE_LOCKED = 2) to
+	 * match the endpoint's own contract rather than inventing word
+	 * aliases the endpoint does not use.
+	 */
+	#[Then('/^user "([^"]*)" sets thread "([^"]*)" state to (\d+) in room "([^"]*)" with (\d+)(?: \((v1)\))?$/')]
+	public function userSetsThreadState(string $user, string $title, int $state, string $identifier, int $statusCode, string $apiVersion = 'v1', ?TableNode $formData = null): void {
+		$threadId = self::$titleToThreadId[$title];
+		$data = [['state', $state]];
+		if ($formData instanceof TableNode) {
+			$hash = $formData->getRowsHash();
+			if (isset($hash['reason'])) {
+				$data[] = ['reason', $hash['reason']];
+			}
+		}
+
+		$this->setCurrentUser($user);
+		$this->sendRequest(
+			'PUT', '/apps/spreed/api/' . $apiVersion . '/chat/' . self::$identifierToToken[$identifier] . '/threads/' . $threadId . '/state',
+			new TableNode($data)
+		);
+		$this->assertStatusCode($this->response, $statusCode);
+	}
+
 	#[Then('/^user "([^"]*)" edits message ("[^"]*"|\'[^\']*\') in room "([^"]*)" to ("[^"]*"|\'[^\']*\') with (\d+)(?: \((v1)\))?$/')]
 	public function userEditsMessageToRoom(string $user, string $oldMessage, string $identifier, string $newMessage, int $statusCode, string $apiVersion = 'v1', ?TableNode $formData = null): void {
 		$oldMessage = substr($oldMessage, 1, -1);

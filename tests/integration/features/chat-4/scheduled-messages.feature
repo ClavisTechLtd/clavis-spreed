@@ -583,3 +583,66 @@ Feature: chat-4/scheduling
       | room | users     | participant1 | participant1-displayname | comment     | Message 2 {mention-team1}  | {"mention-team1":{"type":"circle","id":"TEAM_ID(team)","name":"team","link":"","mention-id":"team\/TEAM_ID(team)"}} |
       | room | users     | participant1 | participant1-displayname | comment     | Message 1 {mention-group1} | {"mention-group1":{"type":"user-group","id":"group","name":"group-displayname","mention-id":"group\/group"}}        |
       | room | users     | participant2 | participant2-displayname | comment     | Message                    | []                                                                                                                  |
+
+  # Story 1.6: paths 8 and 9 - scheduling writes no comment at all, so
+  # the write-refusal guard has a documented second call site
+  # (ChatController::scheduleMessage(), AC8) in addition to the one
+  # inside ChatManager::sendMessage() that the background job reaches
+  # when a scheduled message actually fires (AC9). AC10 is the
+  # regression check that the guard reads the Thread's *current* state
+  # at fire time, not a snapshot from scheduling time.
+
+  Scenario: A Locked Thread refuses scheduling into it at request time (path 8)
+    Given user "participant1" sends thread "Thread 1" with message "Message 0" to room "room" with 201
+    And user "participant1" sets thread "Thread 1" state to 2 in room "room" with 200
+    When user "participant1" schedules a message to room "room" with 400
+      | message  | Message 5 |
+      | sendAt   | {FUTURE}  |
+      | threadId | Thread 1  |
+    Then user "participant1" sees the following scheduled messages in room "room" with 200
+    And user "participant1" is participant of the following rooms (v4)
+      | id   | type | hasScheduledMessages |
+      | room | 2    | 0                    |
+
+  Scenario: A Thread Locked before a scheduled message fires refuses it and marks it failed (path 9)
+    Given user "participant1" sends thread "Thread 1" with message "Message 0" to room "room" with 201
+    When user "participant1" schedules a message to room "room" with 201
+      | message  | Message 5 |
+      | sendAt   | {NOW}     |
+      | threadId | Thread 1  |
+    Then user "participant1" sees the following scheduled messages in room "room" with 200
+      | id        | actorType | actorId      | threadId | parent | message   | messageType | sendAt | silent |
+      | Message 5 | users     | participant1 | Thread 1 | null   | Message 5 | comment     | {NOW}  | false  |
+    And user "participant1" sets thread "Thread 1" state to 2 in room "room" with 200
+    When wait for 4 seconds
+    And force run "OCA\Talk\BackgroundJob\SendScheduledMessages" background jobs
+    Then user "participant1" sees the following scheduled messages in room "room" with 200
+      | id        | actorType | actorId      | threadId | parent | message   | messageType | sendAt | silent | originalSendAt |
+      | Message 5 | users     | participant1 | Thread 1 | null   | Message 5 | comment     | 0      | false  | {NOW}          |
+    And user "participant1" is participant of the following rooms (v4)
+      | id   | type | hasScheduledMessages |
+      | room | 2    | -1                   |
+    Then user "participant1" sees the following messages in room "room" with 200
+      | room | actorType | actorId      | actorDisplayName         | message   | messageParameters |
+      | room | users     | participant1 | participant1-displayname | Message 0 | []                |
+      | room | users     | participant2 | participant2-displayname | Message   | []                |
+
+  Scenario: A scheduled message posts normally once the Thread is unlocked again before it fires (AC10)
+    Given user "participant1" sends thread "Thread 1" with message "Message 0" to room "room" with 201
+    When user "participant1" schedules a message to room "room" with 201
+      | message  | Message 5 |
+      | sendAt   | {NOW}     |
+      | threadId | Thread 1  |
+    And user "participant1" sets thread "Thread 1" state to 2 in room "room" with 200
+    And user "participant1" sets thread "Thread 1" state to 0 in room "room" with 200
+    And wait for 4 seconds
+    And force run "OCA\Talk\BackgroundJob\SendScheduledMessages" background jobs
+    Then user "participant1" sees the following scheduled messages in room "room" with 200
+    And user "participant1" is participant of the following rooms (v4)
+      | id   | type | hasScheduledMessages |
+      | room | 2    | 0                    |
+    Then user "participant2" sees the following messages in room "room" with 200
+      | room | actorType | actorId      | actorDisplayName         | messageType | message   | messageParameters |
+      | room | users     | participant1 | participant1-displayname | comment     | Message 5 | []                |
+      | room | users     | participant1 | participant1-displayname | comment     | Message 0 | []                |
+      | room | users     | participant2 | participant2-displayname | comment     | Message   | []                |

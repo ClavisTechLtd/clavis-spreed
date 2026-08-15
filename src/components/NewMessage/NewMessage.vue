@@ -381,6 +381,7 @@ import {
 	selectRange,
 } from '../../utils/selectionRange.ts'
 import { parseSpecialSymbols } from '../../utils/textParse.ts'
+import { isThreadLocked } from '../../utils/threadState.ts'
 
 const supportScheduleMessages = hasTalkFeature('local', 'scheduled-messages')
 
@@ -542,8 +543,16 @@ export default {
 			return (this.conversation.permissions & PARTICIPANT.PERMISSIONS.CHAT) === 0
 		},
 
+		// Story 1.9, AC3: a Locked Thread's composer is disabled pre-emptively,
+		// rather than only reacting to the server's refusal (Story 1.6). A no-op
+		// outside a Thread, since `chatExtrasStore.getThread(token, 0)` is always
+		// undefined.
+		isThreadLocked() {
+			return isThreadLocked(this.chatExtrasStore.getThread(this.token, this.threadId))
+		},
+
 		disabled() {
-			return this.isReadOnly || this.noChatPermission || !this.currentConversationIsJoined || this.isRecordingAudio
+			return this.isReadOnly || this.noChatPermission || !this.currentConversationIsJoined || this.isRecordingAudio || this.isThreadLocked
 		},
 
 		scheduleMessageTime() {
@@ -568,6 +577,8 @@ export default {
 		placeholderText() {
 			if (this.isReadOnly) {
 				return t('spreed', 'This conversation has been locked')
+			} else if (this.isThreadLocked) {
+				return t('spreed', 'This thread has been locked')
 			} else if (this.noChatPermission) {
 				return t('spreed', 'No permission to post messages in this conversation')
 			} else if (!this.currentConversationIsJoined) {

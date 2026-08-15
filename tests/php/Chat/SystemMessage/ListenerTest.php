@@ -17,6 +17,7 @@ use OCA\Talk\Events\AttendeesAddedEvent;
 use OCA\Talk\Events\BeforeDuplicateShareSentEvent;
 use OCA\Talk\Events\ParticipantModifiedEvent;
 use OCA\Talk\Events\RoomModifiedEvent;
+use OCA\Talk\Exceptions\ThreadProperty\LockedException;
 use OCA\Talk\Manager;
 use OCA\Talk\Model\Attendee;
 use OCA\Talk\Participant;
@@ -33,6 +34,7 @@ use OCP\IRequest;
 use OCP\ISession;
 use OCP\IUser;
 use OCP\IUserSession;
+use OCP\Share\Events\BeforeShareCreatedEvent;
 use OCP\Share\Events\ShareCreatedEvent;
 use OCP\Share\IShare;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -689,6 +691,94 @@ class ListenerTest extends TestCase {
 		$share->method('getNode')->willReturn($node);
 		$share->method('getId')->willReturn('42');
 		return $share;
+	}
+
+	/**
+	 * Same as makeListenerWithRoute(), but with a talkMetaData payload — the
+	 * lock pre-flight reads threadId out of it.
+	 */
+	private function makeListenerWithMetaData(string $route, string $metaData): Listener {
+		$request = $this->createMock(IRequest::class);
+		$request->method('getParam')->willReturnMap([
+			['_route', null, $route],
+			['referenceId', null, self::DUMMY_REFERENCE_ID],
+			['talkMetaData', null, $metaData],
+		]);
+
+		$l = $this->createMock(IL10N::class);
+		$l->method('t')->willReturnCallback(fn ($s, $a) => vsprintf($s, $a));
+
+		return new Listener(
+			$request,
+			$this->chatManager,
+			$this->talkSession,
+			$this->session,
+			$this->userSession,
+			$this->timeFactory,
+			$this->manager,
+			$this->participantService,
+			$this->messageParser,
+			$this->threadService,
+			$l,
+			$this->logger,
+		);
+	}
+
+	/**
+	 * Story 1.6, AC6/AC11: the refusal has to happen on the *before* event.
+	 * ShareCreatedEvent fires after Manager::createShare() has persisted the
+	 * share, so refusing there would leave a room share with no chat message
+	 * naming it.
+	 */
+	public function testShareIntoLockedThreadIsRefusedBeforeTheShareIsPersisted(): void {
+		$share = $this->makeShareMock(IShare::TYPE_ROOM, 'roomtoken');
+		$room = $this->createMock(Room::class);
+		$room->method('getId')->willReturn(1234);
+		$this->manager->method('getRoomByToken')->with('roomtoken')->willReturn($room);
+
+		$this->threadService->expects($this->once())
+			->method('ensureNotLocked')
+			->with(1234, 55)
+			->willThrowException(new LockedException(LockedException::REASON_LOCKED));
+
+		// Nothing may be written: not the chat message, and — because this runs
+		// on the before event — not the share either.
+		$this->chatManager->expects($this->never())->method('addSystemMessage');
+
+		$listener = $this->makeListenerWithMetaData('ocs.files_sharing.shareapi.createshare', json_encode(['threadId' => 55]));
+
+		$this->expectException(LockedException::class);
+		self::invokePrivate($listener, 'handle', [new BeforeShareCreatedEvent($share)]);
+	}
+
+	/**
+	 * The guard must not fire for an ordinary share. ShareAPIController maps
+	 * \InvalidArgumentException to a 403, so a false positive here would refuse
+	 * unrelated file shares.
+	 */
+	public function testShareWithoutThreadIdSkipsTheLockGuard(): void {
+		$share = $this->makeShareMock(IShare::TYPE_ROOM, 'roomtoken');
+		$room = $this->createMock(Room::class);
+		$room->method('getMessageExpiration')->willReturn(0);
+		$this->manager->method('getRoomByToken')->with('roomtoken')->willReturn($room);
+
+		$this->threadService->expects($this->never())->method('ensureNotLocked');
+
+		$listener = $this->makeListenerWithMetaData('ocs.files_sharing.shareapi.createshare', json_encode(['caption' => 'hello']));
+		self::invokePrivate($listener, 'handle', [new BeforeShareCreatedEvent($share)]);
+	}
+
+	/**
+	 * The attachment endpoint runs its own pre-flight before creating the
+	 * folder-level share, so this guard must stay out of its way.
+	 */
+	public function testAttachmentRouteSkipsTheLockGuard(): void {
+		$share = $this->makeShareMock(IShare::TYPE_ROOM, 'roomtoken');
+
+		$this->threadService->expects($this->never())->method('ensureNotLocked');
+
+		$listener = $this->makeListenerWithMetaData('ocs.spreed.chat.postattachmenttoroom', json_encode(['threadId' => 55]));
+		self::invokePrivate($listener, 'handle', [new BeforeShareCreatedEvent($share)]);
 	}
 
 	public function testFixMimeTypeSkippedForAttachmentRoute(): void {

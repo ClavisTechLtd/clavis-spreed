@@ -278,6 +278,10 @@ export const MESSAGE = {
 		RECORDING_STOPPED: 'recording_stopped',
 		THREAD_CREATED: 'thread_created',
 		THREAD_RENAMED: 'thread_renamed',
+		THREAD_CLOSED: 'thread_closed',
+		THREAD_LOCKED: 'thread_locked',
+		THREAD_REOPENED: 'thread_reopened',
+		THREAD_UNLOCKED: 'thread_unlocked',
 		USER_ADDED: 'user_added',
 		USER_REMOVED: 'user_removed',
 	},
@@ -291,6 +295,15 @@ export const MESSAGE = {
 		VOICE_MESSAGE: 'voice-message',
 		RECORD_AUDIO: 'record-audio',
 		RECORD_VIDEO: 'record-video',
+	},
+} as const
+
+// Story 1.4: mirrors OCA\Talk\Model\Thread::STATE_* server-side
+export const THREAD = {
+	STATE: {
+		ONGOING: 0,
+		CLOSED: 1,
+		LOCKED: 2,
 	},
 } as const
 

@@ -2048,6 +2048,27 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/ocs/v2.php/apps/spreed/api/{apiVersion}/chat/{token}/threads/{threadId}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change the lifecycle state of a thread
+         * @description One endpoint serves all four transitions - close, lock, reopen from Closed, reopen from Locked (AD-12) - the target state and the Thread's current state together determine which transition, and therefore which system message verb, applies.
+         *     Required capability: `thread-management`
+         */
+        put: operations["thread-set-state"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ocs/v2.php/apps/spreed/api/{apiVersion}/chat/{token}/threads/{messageId}/notify": {
         parameters: {
             query?: never;
@@ -2300,6 +2321,13 @@ export type components = {
                      * @enum {string}
                      */
                     "group-mode": "none" | "group-first" | "private-first";
+                };
+                threads: {
+                    /**
+                     * Format: int64
+                     * @description Maximum length of a Thread's lock reason
+                     */
+                    "lock-reason-length": number;
                 };
                 federation: {
                     /** @description Whether federation is enabled */
@@ -3315,6 +3343,14 @@ export type components = {
              * @description Number of replies in the thread
              */
             numReplies: number;
+            /**
+             * Format: int64
+             * @description State of the thread (`0` Ongoing, `1` Closed, `2` Locked)
+             * @enum {integer}
+             */
+            state: 0 | 1 | 2;
+            /** @description Optional reason given when the thread was last locked, null when none was given or the thread was never locked */
+            lockReason: string | null;
         };
         ThreadAttendee: {
             /**
@@ -3329,6 +3365,8 @@ export type components = {
             thread: components["schemas"]["Thread"];
             /** @description Attendee details for the current user in this thread */
             attendee: components["schemas"]["ThreadAttendee"];
+            /** @description Whether the current actor may manage this thread (change its state, feature it, or edit its tags) */
+            canManage: boolean;
             /** @description First message in the thread (root message) */
             first: components["schemas"]["ChatMessage"] | null;
             /** @description Last message in the thread */
@@ -5720,7 +5758,7 @@ export interface operations {
                             meta: components["schemas"]["OCSMeta"];
                             data: {
                                 /** @enum {string} */
-                                error: "message" | "reply-to" | "send-at";
+                                error: "message" | "reply-to" | "send-at" | "locked";
                             };
                         };
                     };
@@ -6947,7 +6985,7 @@ export interface operations {
                             meta: components["schemas"]["OCSMeta"];
                             data: {
                                 /** @enum {string} */
-                                error: "message" | "until" | "status";
+                                error: "message" | "until" | "status" | "locked";
                             };
                         };
                     };
@@ -6964,7 +7002,7 @@ export interface operations {
                             meta: components["schemas"]["OCSMeta"];
                             data: {
                                 /** @enum {string} */
-                                error: "message" | "until" | "status";
+                                error: "message" | "until" | "status" | "locked";
                             };
                         };
                     };
@@ -7017,7 +7055,7 @@ export interface operations {
                             meta: components["schemas"]["OCSMeta"];
                             data: {
                                 /** @enum {string} */
-                                error: "status";
+                                error: "status" | "locked";
                             };
                         };
                     };
@@ -8650,7 +8688,7 @@ export interface operations {
                             meta: components["schemas"]["OCSMeta"];
                             data: {
                                 /** @enum {string} */
-                                error: "draft" | "options" | "poll" | "question" | "room";
+                                error: "draft" | "options" | "poll" | "question" | "room" | "locked";
                             };
                         };
                     };
@@ -13663,6 +13701,105 @@ export interface operations {
                             data: {
                                 /** @enum {string} */
                                 error: "title";
+                            };
+                        };
+                    };
+                };
+            };
+            /** @description Not allowed, either not the original author or not a moderator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ocs: {
+                            meta: components["schemas"]["OCSMeta"];
+                            data: {
+                                /** @enum {string} */
+                                error: "permission";
+                            };
+                        };
+                    };
+                };
+            };
+            /** @description Thread not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ocs: {
+                            meta: components["schemas"]["OCSMeta"];
+                            data: {
+                                /** @enum {string} */
+                                error: "thread";
+                            };
+                        };
+                    };
+                };
+            };
+        };
+    };
+    "thread-set-state": {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required to be true for the API request to pass */
+                "OCS-APIRequest": boolean;
+            };
+            path: {
+                apiVersion: "v1";
+                token: string;
+                /** @description The thread ID to change the state for */
+                threadId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int64
+                     * @description New state
+                     */
+                    state: number;
+                    /**
+                     * @description Optional reason, only meaningful (and only validated) when locking; ignored for every other target state (max. 4000 characters, see `config => threads => lock-reason-length`)
+                     * @default null
+                     */
+                    reason?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Thread state changed successfully */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ocs: {
+                            meta: components["schemas"]["OCSMeta"];
+                            data: components["schemas"]["ThreadInfo"];
+                        };
+                    };
+                };
+            };
+            /** @description The provided state or reason was invalid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ocs: {
+                            meta: components["schemas"]["OCSMeta"];
+                            data: {
+                                /** @enum {string} */
+                                error: "value" | "reason";
                             };
                         };
                     };

@@ -49,6 +49,10 @@ const SYSTEM_MESSAGE_TYPE_RELAY = [
 	MESSAGE.SYSTEM_TYPE.CALL_ENDED_EVERYONE, // 'call_ended_everyone',
 	MESSAGE.SYSTEM_TYPE.THREAD_CREATED, // 'thread_created',
 	MESSAGE.SYSTEM_TYPE.THREAD_RENAMED, // 'thread_renamed',
+	MESSAGE.SYSTEM_TYPE.THREAD_CLOSED, // 'thread_closed',
+	MESSAGE.SYSTEM_TYPE.THREAD_LOCKED, // 'thread_locked',
+	MESSAGE.SYSTEM_TYPE.THREAD_REOPENED, // 'thread_reopened',
+	MESSAGE.SYSTEM_TYPE.THREAD_UNLOCKED, // 'thread_unlocked',
 	MESSAGE.SYSTEM_TYPE.MESSAGE_DELETED, // 'message_deleted',
 	MESSAGE.SYSTEM_TYPE.MESSAGE_EDITED, // 'message_edited',
 	MESSAGE.SYSTEM_TYPE.MODERATOR_PROMOTED, // 'moderator_promoted',
@@ -75,6 +79,16 @@ const SYSTEM_MESSAGE_TYPE_UNTRANSLATED = [
 	MESSAGE.SYSTEM_TYPE.MESSAGE_EDITED,
 	MESSAGE.SYSTEM_TYPE.THREAD_CREATED,
 	MESSAGE.SYSTEM_TYPE.THREAD_RENAMED,
+	// Story 1.4: kept server-parsed verbatim (not re-derived client-side)
+	// for the same reason as THREAD_CREATED/THREAD_RENAMED above - and,
+	// unlike those two, this is load-bearing rather than stylistic: the
+	// relay consumer (useGetMessages.ts::addMessageFromChatRelay()) early-
+	// returns on any localization throw, which would otherwise skip the
+	// threadInfo processing this story's AC16 depends on.
+	MESSAGE.SYSTEM_TYPE.THREAD_CLOSED,
+	MESSAGE.SYSTEM_TYPE.THREAD_LOCKED,
+	MESSAGE.SYSTEM_TYPE.THREAD_REOPENED,
+	MESSAGE.SYSTEM_TYPE.THREAD_UNLOCKED,
 ] as const
 
 /**

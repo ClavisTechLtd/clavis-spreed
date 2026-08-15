@@ -62,6 +62,8 @@ class SelectHelper {
 				->selectAlias($alias . 'num_replies', 'th_num_replies')
 				->selectAlias($alias . 'last_activity', 'th_last_activity')
 				->selectAlias($alias . 'name', 'th_name')
+				->selectAlias($alias . 'state', 'th_state')
+				->selectAlias($alias . 'lock_reason', 'th_lock_reason')
 				->selectAlias($alias . 'id', 'th_id');
 			return;
 		}
@@ -72,6 +74,8 @@ class SelectHelper {
 			$alias . 'num_replies',
 			$alias . 'last_activity',
 			$alias . 'name',
+			$alias . 'state',
+			$alias . 'lock_reason',
 		])->selectAlias($alias . 'id', 'th_id');
 
 	}

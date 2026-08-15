@@ -22,6 +22,7 @@ import { useStore } from 'vuex'
 import ConfirmDialog from '../components/UIShared/ConfirmDialog.vue'
 import { PARTICIPANT } from '../constants.ts'
 import BrowserStorage from '../services/BrowserStorage.js'
+import { getTalkConfig } from '../services/CapabilitiesManager.ts'
 import { EventBus } from '../services/EventBus.ts'
 import {
 	deleteScheduledMessage as deleteScheduledMessageApi,
@@ -33,6 +34,7 @@ import {
 	renameThread as renameThreadApi,
 	scheduleMessage as scheduleMessageApi,
 	setThreadNotificationLevel as setThreadNotificationLevelApi,
+	setThreadState as setThreadStateApi,
 	summarizeChat,
 } from '../services/messagesService.ts'
 import { parseMentions, parseSpecialSymbols } from '../utils/textParse.ts'
@@ -92,6 +94,20 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 		if (threads.value[token]?.[threadId]) {
 			return threads.value[token][threadId]
 		}
+	}
+
+	/**
+	 * Returns whether the current actor may manage (change state, feature,
+	 * tag) a given thread - Story 1.3 AC6's single computed-getter seam.
+	 * Every control that needs this answer reads it from here rather than
+	 * re-deriving its own permission check from Vuex moderator state or
+	 * actor comparisons.
+	 *
+	 * @param token - conversation token
+	 * @param threadId - thread id
+	 */
+	function canManageThread(token: string, threadId: number): boolean {
+		return threads.value[token]?.[threadId]?.canManage ?? false
 	}
 
 	/**
@@ -352,6 +368,7 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 			threads.value[token][threadId] = {
 				thread: payload.thread ?? threads.value[token][threadId].thread,
 				attendee: payload.attendee ?? threads.value[token][threadId].attendee,
+				canManage: payload.canManage ?? threads.value[token][threadId].canManage,
 				first: payload.first ?? threads.value[token][threadId].first,
 				last: payload.last ?? threads.value[token][threadId].last,
 			}
@@ -411,6 +428,93 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 				console.error(e)
 			}
 		}
+	}
+
+	/**
+	 * Story 1.4, AC1-AC4, AC14: change a thread's lifecycle state on the
+	 * server and adopt the response - never the request - into the store
+	 * (AD-13, last write wins).
+	 *
+	 * @param token - conversation token
+	 * @param threadId - thread id to update
+	 * @param state - new state (see THREAD.STATE)
+	 * @param reason - optional reason, only meaningful when locking
+	 */
+	async function changeThreadState(token: string, threadId: number, state: number, reason?: string) {
+		try {
+			const response = await setThreadStateApi(token, threadId, state, reason)
+			addThread(token, response.data.ocs.data)
+		} catch (e) {
+			showError(t('spreed', 'Failed to change the thread state'))
+			console.error(e)
+		}
+	}
+
+	/**
+	 * Story 1.4, AC10, AC11: prompt for an optional lock reason before
+	 * locking a thread, always returning the entered (possibly empty)
+	 * string. The length bound is the one server-side constant published
+	 * via capabilities (AD-9 Consistency Convention), stated in the
+	 * field's label rather than restated as a client literal.
+	 *
+	 * Returns `null` when the moderator backed out, and a string - possibly
+	 * empty, which is AC11's "no reason" case - when they confirmed.
+	 *
+	 * The distinction has to be made here rather than read off the resolved
+	 * value. For an `isForm` dialog, ConfirmDialog.vue's onClosing() submits
+	 * the current input value on *every* close, including Escape, the X and
+	 * a click outside, so the promise always resolves with a string. The
+	 * other `isForm` callers in this app (rename thread, create/rename tag)
+	 * are unharmed by that because they guard with `if (!name)` and an empty
+	 * name is not actionable. An empty lock *reason* is actionable - it
+	 * locks the thread - so the same shape would mean dismissing the dialog
+	 * locks the thread. Track confirmation in the button callbacks instead,
+	 * which run only when a button is actually pressed.
+	 *
+	 * Deliberately not fixed inside ConfirmDialog.vue: it is upstream and
+	 * shared with three other flows whose contract depends on the current
+	 * behaviour.
+	 *
+	 * Known limitation: pressing Enter in the field goes through
+	 * NcTextField's own `@keydown.enter` handler, which closes the dialog
+	 * without running any button callback, so it reads as a dismissal. That
+	 * fails closed - the thread stays unlocked and the moderator presses
+	 * "Lock" - which is the right way round for a moderation action.
+	 */
+	async function promptLockThreadReason(): Promise<string | null> {
+		let confirmed = false
+		const lockReasonMaxLength = getTalkConfig('local', 'threads', 'lock-reason-length') || 4000
+
+		const reason = await spawnDialog(ConfirmDialog, {
+			name: t('spreed', 'Lock thread'),
+			isForm: true,
+			inputProps: {
+				value: '',
+				label: t('spreed', 'Reason (optional, up to {max} characters)', { max: lockReasonMaxLength }),
+			},
+			buttons: [
+				{
+					label: t('spreed', 'Dismiss'),
+					variant: 'tertiary',
+					callback: () => {
+						confirmed = false
+					},
+				},
+				{
+					label: t('spreed', 'Lock'),
+					variant: 'primary',
+					callback: () => {
+						confirmed = true
+					},
+				},
+			],
+		})
+
+		if (!confirmed) {
+			return null
+		}
+
+		return typeof reason === 'string' ? reason : ''
 	}
 
 	/**
@@ -856,6 +960,7 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 		followedThreadsList,
 
 		getThread,
+		canManageThread,
 		getThreadsList,
 		getThreadTitle,
 		getParentIdToReply,
@@ -875,6 +980,8 @@ export const useChatExtrasStore = defineStore('chatExtras', () => {
 		updateThread,
 		updateThreadTitle,
 		renameThread,
+		changeThreadState,
+		promptLockThreadReason,
 		clearThreads,
 		removeMessageFromThread,
 		getChatInput,

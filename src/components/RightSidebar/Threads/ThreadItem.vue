@@ -13,30 +13,40 @@ import { t } from '@nextcloud/l10n'
 import { usernameToColor } from '@nextcloud/vue/functions/usernameToColor'
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useStore } from 'vuex'
 import NcActionButton from '@nextcloud/vue/components/NcActionButton'
 import NcActionSeparator from '@nextcloud/vue/components/NcActionSeparator'
 import NcDateTime from '@nextcloud/vue/components/NcDateTime'
 import NcListItem from '@nextcloud/vue/components/NcListItem'
+import IconArchiveOutline from 'vue-material-design-icons/ArchiveOutline.vue'
 import IconArrowLeft from 'vue-material-design-icons/ArrowLeft.vue'
 import IconArrowLeftTop from 'vue-material-design-icons/ArrowLeftTop.vue'
 import IconBellOutline from 'vue-material-design-icons/BellOutline.vue'
 import IconForumOutline from 'vue-material-design-icons/ForumOutline.vue'
+import IconLockOpenOutline from 'vue-material-design-icons/LockOpenOutline.vue'
+import IconLockOutline from 'vue-material-design-icons/LockOutline.vue'
 import IconPencilOutline from 'vue-material-design-icons/PencilOutline.vue'
-import { AVATAR, PARTICIPANT } from '../../../constants.ts'
-import { useActorStore } from '../../../stores/actor.ts'
+import ThreadStateBadge from './ThreadStateBadge.vue'
+import { AVATAR, THREAD } from '../../../constants.ts'
 import { useChatExtrasStore } from '../../../stores/chatExtras.ts'
 import { getDisplayNameWithFallback } from '../../../utils/getDisplayName.ts'
 import { parseToSimpleMessage } from '../../../utils/textParse.ts'
 import { notificationLevelIcons, notificationLevels } from './threadsConstants.ts'
 
-const { thread } = defineProps<{ thread: ThreadInfo }>()
+const { thread, showManagementActions = false } = defineProps<{
+	thread: ThreadInfo
+	/**
+	 * Story 1.8, AC11: whether this row offers the four lifecycle-transition
+	 * actions. Scoped to the "threads list" surface (`ThreadsTab.vue`) only
+	 * - the surface Epic 2 later replaces with the Directory - and not to
+	 * the cross-Conversation Followed Thread List (`LeftSidebar.vue`),
+	 * which omits this prop and keeps today's behaviour.
+	 */
+	showManagementActions?: boolean
+}>()
 
 const router = useRouter()
 const route = useRoute()
-const store = useStore()
 
-const actorStore = useActorStore()
 const chatExtrasStore = useChatExtrasStore()
 
 const submenu = ref<string | null>(null)
@@ -78,16 +88,9 @@ const timeFormat = computed<Intl.DateTimeFormatOptions>(() => {
 
 const threadNotificationLabel = computed(() => notificationLevels.find((l) => l.value === thread.attendee.notificationLevel)?.label)
 
-const isModeratorOrOwner = computed(() => {
-	if (thread.first?.actorId === actorStore.actorId && thread.first?.actorType === actorStore.actorType) {
-		return true
-	}
-
-	const conversation = store.getters.conversation(thread.thread.roomToken)
-	return conversation?.participantType === PARTICIPANT.TYPE.OWNER
-		|| conversation?.participantType === PARTICIPANT.TYPE.MODERATOR
-		|| conversation?.participantType === PARTICIPANT.TYPE.GUEST_MODERATOR
-})
+// Story 1.3, AC6: the one computed getter every management control reads -
+// the server's authority answer, not a locally re-derived permission check.
+const canManageThread = computed(() => chatExtrasStore.canManageThread(thread.thread.roomToken, thread.thread.id))
 
 /**
  * Renames the thread
@@ -105,6 +108,39 @@ function handleActionsMenuOpen(open: boolean) {
 	if (!open) {
 		submenu.value = null
 	}
+}
+
+// Story 1.8, AC11/AC12: the row-menu equivalent of ThreadHeader.vue's
+// four lifecycle-transition actions (Story 1.4 AC17), so a Thread Manager
+// closes or locks a Thread without opening it. `changeThreadState()`
+// replaces the store's entry with the server's response (Story 1.4
+// AD-13), so the row's badge updates in place - nothing here navigates.
+
+/**
+ * Close the thread (Ongoing -> Closed), from the row menu.
+ */
+async function closeThread() {
+	await chatExtrasStore.changeThreadState(thread.thread.roomToken, thread.thread.id, THREAD.STATE.CLOSED)
+}
+
+/**
+ * Reopen the thread (Closed -> Ongoing) or unlock it (Locked -> Ongoing) -
+ * both land on the same target state (mirrors ThreadHeader.vue).
+ */
+async function reopenThread() {
+	await chatExtrasStore.changeThreadState(thread.thread.roomToken, thread.thread.id, THREAD.STATE.ONGOING)
+}
+
+/**
+ * Lock the thread, from either Ongoing or Closed, with an optional reason.
+ */
+async function lockThread() {
+	const reason = await chatExtrasStore.promptLockThreadReason()
+	if (reason === null) {
+		// Dismissed. An empty string is a lock with no reason, not a cancel.
+		return
+	}
+	await chatExtrasStore.changeThreadState(thread.thread.roomToken, thread.thread.id, THREAD.STATE.LOCKED, reason)
 }
 </script>
 
@@ -133,7 +169,7 @@ function handleActionsMenuOpen(open: boolean) {
 		<template #actions>
 			<template v-if="submenu === null">
 				<NcActionButton
-					v-if="isModeratorOrOwner"
+					v-if="canManageThread"
 					key="rename-thread"
 					closeAfterClick
 					@click="renameThreadTitle">
@@ -151,6 +187,53 @@ function handleActionsMenuOpen(open: boolean) {
 						<IconBellOutline :size="20" />
 					</template>
 					{{ t('spreed', 'Thread notifications') }}
+				</NcActionButton>
+				<!-- Story 1.8, AC11/AC12: same four transitions as
+					ThreadHeader.vue (Story 1.4 AC17), gated on
+					showManagementActions (this surface only) and
+					canManageThread (absent, not disabled, for a
+					non-manager). Which of them show depends on the
+					row's current state, matching ThreadHeader.vue's
+					mapping exactly. -->
+				<NcActionButton
+					v-if="showManagementActions && canManageThread && thread.thread.state === THREAD.STATE.ONGOING"
+					key="close-thread"
+					closeAfterClick
+					@click="closeThread">
+					<template #icon>
+						<IconArchiveOutline :size="20" />
+					</template>
+					{{ t('spreed', 'Close thread') }}
+				</NcActionButton>
+				<NcActionButton
+					v-if="showManagementActions && canManageThread && thread.thread.state === THREAD.STATE.CLOSED"
+					key="reopen-thread"
+					closeAfterClick
+					@click="reopenThread">
+					<template #icon>
+						<IconLockOpenOutline :size="20" />
+					</template>
+					{{ t('spreed', 'Reopen thread') }}
+				</NcActionButton>
+				<NcActionButton
+					v-if="showManagementActions && canManageThread && (thread.thread.state === THREAD.STATE.ONGOING || thread.thread.state === THREAD.STATE.CLOSED)"
+					key="lock-thread"
+					closeAfterClick
+					@click="lockThread">
+					<template #icon>
+						<IconLockOutline :size="20" />
+					</template>
+					{{ t('spreed', 'Lock thread') }}
+				</NcActionButton>
+				<NcActionButton
+					v-if="showManagementActions && canManageThread && thread.thread.state === THREAD.STATE.LOCKED"
+					key="unlock-thread"
+					closeAfterClick
+					@click="reopenThread">
+					<template #icon>
+						<IconLockOpenOutline :size="20" />
+					</template>
+					{{ t('spreed', 'Unlock thread') }}
 				</NcActionButton>
 			</template>
 			<template v-else-if="submenu === 'notifications'">
@@ -183,6 +266,7 @@ function handleActionsMenuOpen(open: boolean) {
 		</template>
 		<template #details>
 			<span class="thread__details">
+				<ThreadStateBadge :state="thread.thread.state" />
 				<span class="thread__details-replies">
 					<IconArrowLeftTop class="bidirectional-icon" :size="16" />
 					{{ thread.thread.numReplies }}

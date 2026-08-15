@@ -20,6 +20,7 @@ use OCA\Talk\Config;
 use OCA\Talk\Exceptions\CannotReachRemoteException;
 use OCA\Talk\Exceptions\ChatSummaryException;
 use OCA\Talk\Exceptions\ParticipantNotFoundException;
+use OCA\Talk\Exceptions\ThreadProperty\LockedException;
 use OCA\Talk\GuestManager;
 use OCA\Talk\Manager;
 use OCA\Talk\MatterbridgeManager;
@@ -449,6 +450,13 @@ class ChatController extends AEnvironmentAwareOCSController {
 			return new DataResponse(['error' => 'message'], Http::STATUS_REQUEST_ENTITY_TOO_LARGE);
 		} catch (IRateLimitExceededException) {
 			return new DataResponse(['error' => 'mentions'], Http::STATUS_TOO_MANY_REQUESTS);
+		} catch (LockedException $e) {
+			// AD-4: the plain "reply into a Locked Thread" case is the most
+			// frequent one, and without this catch the generic handler below
+			// would flatten it into 'message' - indistinguishable from a
+			// malformed send. Every other endpoint this story touches already
+			// reports 'locked'; this one must too.
+			return new DataResponse(['error' => $e->getReason()], Http::STATUS_BAD_REQUEST);
 		} catch (\Exception $e) {
 			$this->logger->warning($e->getMessage());
 			return new DataResponse(['error' => 'message'], Http::STATUS_BAD_REQUEST);
@@ -507,7 +515,7 @@ class ChatController extends AEnvironmentAwareOCSController {
 	 * @param bool $silent If sent silent the scheduled message will not create any notifications when sent
 	 * @param string $threadTitle Only supported when not replying, when given will create a thread (requires `threads` capability)
 	 * @param int $threadId Thread id without quoting a specific message (requires `threads` capability)
-	 * @return DataResponse<Http::STATUS_CREATED, TalkScheduledMessage, array{}>|DataResponse<Http::STATUS_BAD_REQUEST, array{error: 'message'|'reply-to'|'send-at'}, array{}>|DataResponse<Http::STATUS_FORBIDDEN, array{error: 'reply-to'}, array{}>|DataResponse<Http::STATUS_REQUEST_ENTITY_TOO_LARGE, array{error: 'message'}, array{}>|DataResponse<Http::STATUS_NOT_FOUND, array{error: 'actor'}, array{}>
+	 * @return DataResponse<Http::STATUS_CREATED, TalkScheduledMessage, array{}>|DataResponse<Http::STATUS_BAD_REQUEST, array{error: 'message'|'reply-to'|'send-at'|'locked'}, array{}>|DataResponse<Http::STATUS_FORBIDDEN, array{error: 'reply-to'}, array{}>|DataResponse<Http::STATUS_REQUEST_ENTITY_TOO_LARGE, array{error: 'message'}, array{}>|DataResponse<Http::STATUS_NOT_FOUND, array{error: 'actor'}, array{}>
 	 *
 	 * 201: Message scheduled successfully
 	 * 400: Scheduling the message is not possible
@@ -562,6 +570,20 @@ class ChatController extends AEnvironmentAwareOCSController {
 
 		if ($threadId !== 0 && !$this->threadService->validateThread($this->room->getId(), $threadId)) {
 			return new DataResponse(['error' => 'reply-to'], Http::STATUS_BAD_REQUEST);
+		}
+
+		if ($threadId !== 0) {
+			// Story 1.6, AC8: scheduling writes no comment at all, so the
+			// write-refusal guard cannot live inside ChatManager for this
+			// path - a documented, stated-in-code carve-out (AD-2), not a
+			// second implementation: it reuses the same shared decision
+			// (ThreadService::ensureNotLocked()) an acting participant and
+			// live request still exist to refuse against, at request time.
+			try {
+				$this->threadService->ensureNotLocked($this->room->getId(), $threadId);
+			} catch (LockedException $e) {
+				return new DataResponse(['error' => $e->getReason()], Http::STATUS_BAD_REQUEST);
+			}
 		}
 
 		$sendAtDateTime = $this->timeFactory->getDateTime('@' . $sendAt, new \DateTimeZone('UTC'));
@@ -798,6 +820,12 @@ class ChatController extends AEnvironmentAwareOCSController {
 			$comment = $this->chatManager->addSystemMessage($this->room, $this->participant, $actorType, $actorId, $message, $creationDateTime, true, $referenceId, threadId: $threadId);
 		} catch (MessageTooLongException) {
 			return new DataResponse(['error' => 'message'], Http::STATUS_REQUEST_ENTITY_TOO_LARGE);
+		} catch (LockedException $e) {
+			// Story 1.6, AC3, AC5, AD-4: distinguishable from the generic
+			// 'message' identifier the catch-all below would otherwise
+			// return - without this, a Locked refusal would be
+			// indistinguishable from every other addSystemMessage() failure.
+			return new DataResponse(['error' => $e->getReason()], Http::STATUS_BAD_REQUEST);
 		} catch (\Exception) {
 			return new DataResponse(['error' => 'message'], Http::STATUS_BAD_REQUEST);
 		}
@@ -1422,6 +1450,9 @@ class ChatController extends AEnvironmentAwareOCSController {
 			);
 		} catch (ShareNotFound) {
 			return new DataResponse(['error' => 'message'], Http::STATUS_NOT_FOUND);
+		} catch (LockedException $e) {
+			// Story 1.7, AC3: a Locked Thread refuses the delete.
+			return new DataResponse(['error' => $e->getReason()], Http::STATUS_BAD_REQUEST);
 		}
 
 		$systemMessage = $this->messageParser->createMessage($this->room, $this->participant, $systemMessageComment, $this->l);
@@ -1541,6 +1572,13 @@ class ChatController extends AEnvironmentAwareOCSController {
 			);
 		} catch (MessageTooLongException) {
 			return new DataResponse(['error' => 'message'], Http::STATUS_REQUEST_ENTITY_TOO_LARGE);
+		} catch (LockedException $e) {
+			// Story 1.7, AC2: a Locked Thread refuses the edit, with the
+			// distinguishable 'locked' identifier - checked explicitly and
+			// ahead of the generic \InvalidArgumentException catch below,
+			// rather than relying on that catch's incidental
+			// message-equals-reason behaviour.
+			return new DataResponse(['error' => $e->getReason()], Http::STATUS_BAD_REQUEST);
 		} catch (\InvalidArgumentException $e) {
 			if ($e->getMessage() === 'object_share') {
 				return new DataResponse(['error' => 'message'], Http::STATUS_METHOD_NOT_ALLOWED);
@@ -2146,7 +2184,7 @@ class ChatController extends AEnvironmentAwareOCSController {
 	 * @psalm-param non-negative-int $messageId
 	 * @param int $pinUntil Unix timestamp when to unpin the message
 	 * @psalm-param non-negative-int $pinUntil
-	 * @return DataResponse<Http::STATUS_OK, ?TalkChatMessageWithParent, array{X-Chat-Last-Common-Read?: numeric-string}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_NOT_FOUND, array{error: 'message'|'until'|'status'}, array{}>
+	 * @return DataResponse<Http::STATUS_OK, ?TalkChatMessageWithParent, array{X-Chat-Last-Common-Read?: numeric-string}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_NOT_FOUND, array{error: 'message'|'until'|'status'|'locked'}, array{}>
 	 *
 	 * 200: Message was pinned successfully
 	 * 400: Message could not be pinned
@@ -2184,7 +2222,12 @@ class ChatController extends AEnvironmentAwareOCSController {
 			return new DataResponse(['error' => 'until'], Http::STATUS_BAD_REQUEST);
 		}
 
-		$systemMessageComment = $this->chatManager->pinMessage($this->room, $comment, $this->participant, $pinUntil);
+		try {
+			$systemMessageComment = $this->chatManager->pinMessage($this->room, $comment, $this->participant, $pinUntil);
+		} catch (LockedException $e) {
+			// Story 1.7, AC4: a Locked Thread refuses the pin.
+			return new DataResponse(['error' => $e->getReason()], Http::STATUS_BAD_REQUEST);
+		}
 
 		return $this->parseCommentAndParentToResponse($systemMessageComment, $comment, Http::STATUS_OK);
 	}
@@ -2196,7 +2239,7 @@ class ChatController extends AEnvironmentAwareOCSController {
 	 *
 	 * @param int $messageId ID of the message
 	 * @psalm-param non-negative-int $messageId
-	 * @return DataResponse<Http::STATUS_OK, ?TalkChatMessageWithParent, array{X-Chat-Last-Common-Read?: numeric-string}>|DataResponse<Http::STATUS_BAD_REQUEST, array{error: 'status'}, array{}>|DataResponse<Http::STATUS_NOT_FOUND, array{error: 'message'}, array{}>
+	 * @return DataResponse<Http::STATUS_OK, ?TalkChatMessageWithParent, array{X-Chat-Last-Common-Read?: numeric-string}>|DataResponse<Http::STATUS_BAD_REQUEST, array{error: 'status'|'locked'}, array{}>|DataResponse<Http::STATUS_NOT_FOUND, array{error: 'message'}, array{}>
 	 *
 	 * 200: Message is not pinned now
 	 * 400: Federation request answered with an unknown status code
@@ -2224,7 +2267,12 @@ class ChatController extends AEnvironmentAwareOCSController {
 			return new DataResponse(['error' => 'message'], Http::STATUS_NOT_FOUND);
 		}
 
-		$systemMessageComment = $this->chatManager->unpinMessage($this->room, $comment, $this->participant);
+		try {
+			$systemMessageComment = $this->chatManager->unpinMessage($this->room, $comment, $this->participant);
+		} catch (LockedException $e) {
+			// Story 1.7, AC4: a Locked Thread refuses the unpin.
+			return new DataResponse(['error' => $e->getReason()], Http::STATUS_BAD_REQUEST);
+		}
 
 		return $this->parseCommentAndParentToResponse($systemMessageComment, $comment, Http::STATUS_OK);
 	}
@@ -2540,6 +2588,29 @@ class ChatController extends AEnvironmentAwareOCSController {
 			return new DataResponse(['error' => $this->l->t('File is not inside the conversation draft folder for this room')], Http::STATUS_UNPROCESSABLE_ENTITY);
 		}
 
+		// Story 1.6, AC7, AC11: parse the thread id out of talkMetaData and
+		// validate/guard it here, before finalizeUploadedFile() below has any
+		// side effect - this endpoint performed no thread validation
+		// whatsoever before this story, and refusing after the file has
+		// already been moved would not be a visible refusal, it would be a
+		// silently orphaned move with an uncaught exception.
+		$earlyMetaData = json_decode($talkMetaData, true);
+		$earlyMetaData = is_array($earlyMetaData) ? $earlyMetaData : [];
+		$threadId = isset($earlyMetaData['threadId']) ? (int)$earlyMetaData['threadId'] : 0;
+		if ($threadId !== 0) {
+			if (!$this->threadService->validateThread($this->room->getId(), $threadId)) {
+				// Someone tried to cheat, ignore - matches the tolerant
+				// precedent every other path uses for a stale/foreign id.
+				$threadId = 0;
+			} else {
+				try {
+					$this->threadService->ensureNotLocked($this->room->getId(), $threadId);
+				} catch (LockedException $e) {
+					return new DataResponse(['error' => $e->getReason()], Http::STATUS_BAD_REQUEST);
+				}
+			}
+		}
+
 		// Move the file from Draft into the shared subfolder, resolving any name
 		// conflicts by appending " (1)", " (2)", … to the base name.
 		$desiredName = $fileName !== '' ? $fileName : $node->getName();
@@ -2548,9 +2619,9 @@ class ChatController extends AEnvironmentAwareOCSController {
 		$renameTo = $result['to'];
 		$node = $result['node'];
 
-		// Parse talkMetaData for caption, messageType, silent, replyTo, threadId.
-		$metaData = json_decode($talkMetaData, true);
-		$metaData = is_array($metaData) ? $metaData : [];
+		// Parse talkMetaData for caption, messageType, silent, replyTo
+		// (threadId was already resolved above).
+		$metaData = $earlyMetaData;
 
 		// Validate and sanitize messageType.
 		if (isset($metaData['messageType']) && $metaData['messageType'] === ChatManager::VERB_VOICE_MESSAGE) {
@@ -2571,7 +2642,6 @@ class ChatController extends AEnvironmentAwareOCSController {
 
 		$silent = (bool)($metaData[Message::METADATA_SILENT] ?? false);
 		$replyToId = isset($metaData['replyTo']) ? (int)$metaData['replyTo'] : null;
-		$threadId = isset($metaData['threadId']) ? (int)$metaData['threadId'] : 0;
 		unset($metaData['replyTo'], $metaData['threadId'], $metaData[Message::METADATA_SILENT]);
 
 		$replyToComment = null;

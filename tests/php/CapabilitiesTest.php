@@ -11,6 +11,7 @@ namespace OCA\Talk\Tests\Unit;
 use OCA\Talk\Capabilities;
 use OCA\Talk\Chat\CommentsManager;
 use OCA\Talk\Config;
+use OCA\Talk\Model\Thread;
 use OCA\Talk\Participant;
 use OCA\Talk\Room;
 use OCA\Talk\Service\LiveTranscriptionService;
@@ -233,6 +234,9 @@ class CapabilitiesTest extends TestCase {
 						'retention-event' => 28,
 						'retention-phone' => 7,
 						'retention-instant-meetings' => 1,
+					],
+					'threads' => [
+						'lock-reason-length' => Thread::LOCK_REASON_MAX_LENGTH,
 					],
 					'federation' => [
 						'enabled' => false,
@@ -460,6 +464,9 @@ class CapabilitiesTest extends TestCase {
 						'retention-event' => 28,
 						'retention-phone' => 7,
 						'retention-instant-meetings' => 1,
+					],
+					'threads' => [
+						'lock-reason-length' => Thread::LOCK_REASON_MAX_LENGTH,
 					],
 					'federation' => [
 						'enabled' => false,

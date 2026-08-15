@@ -18,6 +18,7 @@ use OCA\Talk\Room;
 use OCA\Talk\Service\ParticipantService;
 use OCA\Talk\Service\ThreadService;
 use OCA\Talk\Webinary;
+use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\Comments\IComment;
 use OCP\IConfig;
@@ -26,6 +27,7 @@ use OCP\IGroupManager;
 use OCP\IUserManager;
 use OCP\Notification\IManager as INotificationManager;
 use OCP\Notification\INotification;
+use Psr\Log\LoggerInterface;
 
 /**
  * Helper class for notifications related to user mentions in chat messages.
@@ -39,6 +41,31 @@ class Notifier {
 	public const PRIORITY_NORMAL = 1;
 	public const PRIORITY_IMPORTANT = 2;
 
+	/**
+	 * Story 4.2: a lock reason may be up to
+	 * {@see \OCA\Talk\Model\Thread::LOCK_REASON_MAX_LENGTH} characters, and the
+	 * subject parameters below are persisted once per follower. Only
+	 * {@see \OCA\Talk\Notification\Notifier::THREAD_LOCK_REASON_MAX_LENGTH}
+	 * characters are ever rendered, so the reason is bounded here to a value
+	 * comfortably above that render bound: rendering is unaffected, and a single
+	 * transition can no longer write kilobytes per recipient.
+	 *
+	 * AD-14 governs the *provenance* of the reason - it is read from the system
+	 * message's parameter array rather than re-derived from the Thread or parsed
+	 * out of rendered message text - which bounding the stored copy does not
+	 * touch.
+	 */
+	public const THREAD_LOCK_REASON_STORE_MAX_LENGTH = 512;
+
+	/**
+	 * Story 4.1: per-request memoisation of resolved Thread Titles, so posting a
+	 * message into a Thread costs at most one lookup no matter how many
+	 * notifications are created for it.
+	 *
+	 * @var array<int, ?string>
+	 */
+	protected array $threadNames = [];
+
 	public function __construct(
 		private readonly INotificationManager $notificationManager,
 		private readonly IUserManager $userManager,
@@ -48,6 +75,7 @@ class Notifier {
 		private readonly IConfig $config,
 		private readonly ITimeFactory $timeFactory,
 		private readonly Util $util,
+		private readonly LoggerInterface $logger,
 	) {
 	}
 
@@ -316,6 +344,115 @@ class Notifier {
 		}
 	}
 
+	/**
+	 * Notifies the followers of a Thread that its state changed.
+	 *
+	 * Story 4.2: called from {@see \OCA\Talk\Controller\ThreadController::setState()},
+	 * bound to the very guard that emits the lifecycle system message. A state
+	 * change that emits no system message - {@see \OCA\Talk\Service\ThreadService::reviveIfClosed()}
+	 * when someone posts into a Closed Thread - therefore stays silent by
+	 * construction rather than by a second condition that could drift.
+	 *
+	 * @param 'thread_closed'|'thread_locked'|'thread_reopened'|'thread_unlocked' $verb
+	 * @param array $parameters The parameter array assembled for the system message,
+	 *                          read as-is (AD-14): the lock reason is never re-derived
+	 *                          from the Thread nor parsed out of rendered message text.
+	 * @psalm-param array{thread: int, title?: string, reason?: string} $parameters
+	 */
+	public function notifyThreadStateChange(Room $chat, Participant $actor, int $threadId, string $verb, array $parameters): void {
+		$threadAttendees = $this->threadService->findAttendeesForNotificationByThreadId($chat->getId(), $threadId);
+
+		// The same rule {@see self::notifyOtherParticipant()} applies to thread
+		// attendees: only an explicit Participant::NOTIFY_ALWAYS row counts as
+		// following a Thread. The query already excludes Participant::NOTIFY_DEFAULT,
+		// which is where a Thread's creator and repliers land without opting in.
+		$attendeeIds = array_values(array_map(
+			static fn (ThreadAttendee $threadAttendee): int => $threadAttendee->getAttendeeId(),
+			array_filter($threadAttendees, static fn (ThreadAttendee $threadAttendee): bool => $threadAttendee->getNotificationLevel() === Participant::NOTIFY_ALWAYS)
+		));
+		if (empty($attendeeIds)) {
+			return;
+		}
+
+		$participants = $this->participantService->getParticipantsByAttendeeId($chat, $attendeeIds);
+		if (empty($participants)) {
+			return;
+		}
+
+		$actorAttendee = $actor->getAttendee();
+		$subjectData = [
+			'userType' => $actorAttendee->getActorType(),
+			'userId' => $actorAttendee->getActorId(),
+			// A Thread Manager may be a moderator without a user account, and a
+			// user account may be gone by the time the notification is rendered,
+			// so the name is frozen here like every other point-in-time value.
+			'userDisplayName' => $actorAttendee->getDisplayName(),
+			'thread' => $threadId,
+			'title' => $parameters['title'] ?? '',
+		];
+		if (isset($parameters['reason'])) {
+			// Bounded, not re-derived: see self::THREAD_LOCK_REASON_STORE_MAX_LENGTH
+			// for why this does not conflict with AD-14.
+			$subjectData['reason'] = mb_substr((string)$parameters['reason'], 0, self::THREAD_LOCK_REASON_STORE_MAX_LENGTH);
+		}
+
+		$shouldFlush = $this->notificationManager->defer();
+
+		$notification = $this->notificationManager->createNotification();
+		$notification
+			->setApp('spreed')
+			// AD-12: the object id stays the bare token. A composed
+			// `{token}/{threadId}` would be read positionally by shipped clients as
+			// `{token}/{messageId}`, so the thread id travels in the subject
+			// parameters instead.
+			//
+			// The object type is `room`, under two constraints that only `room`
+			// satisfies together:
+			// - it can never be `chat`, because
+			//   {@see self::markMentionNotificationsRead()} marks *every* `chat`
+			//   notification of that user in the room as processed, so simply
+			//   reading the conversation would erase a lifecycle notification.
+			// - it has to be a type the shipped mobile clients already dispatch. The
+			//   Android push worker handles `chat`, `room`, `call`, `recording`,
+			//   `remote_talk_share` and `reminder` and drops everything else, and the
+			//   iOS push notification parser maps only `call`, `room`, `chat`,
+			//   `recording`, `federation` and `reminder`. A new object type such as
+			//   `thread` would make the feature invisible on both.
+			->setObject('room', $chat->getToken())
+			->setSubject($verb, $subjectData)
+			->setDateTime($this->timeFactory->getDateTime());
+
+		foreach ($participants as $participant) {
+			$attendee = $participant->getAttendee();
+			if ($attendee->getId() === $actorAttendee->getId()) {
+				// Never notify the participant about their own action. Both rows come
+				// from the same `talk_attendees` table, so the attendee id is an exact
+				// and cheap identity check.
+				continue;
+			}
+
+			if ($attendee->getActorType() !== Attendee::ACTOR_USERS) {
+				// Only user accounts have a notification inbox
+				continue;
+			}
+
+			$notification->setUser($attendee->getActorId());
+			try {
+				$this->notificationManager->notify($notification);
+			} catch (\InvalidArgumentException $e) {
+				// One unusable recipient must not strand the remaining followers, nor
+				// the flush() below that delivers the already deferred notifications.
+				$this->logger->error('Failed to notify a thread follower about a thread state change', [
+					'exception' => $e,
+				]);
+			}
+		}
+
+		if ($shouldFlush) {
+			$this->notificationManager->flush();
+		}
+	}
+
 	public function notifyReacted(Room $chat, IComment $comment, IComment $reaction): void {
 		if ($comment->getActorType() !== Attendee::ACTOR_USERS) {
 			return;
@@ -341,9 +478,24 @@ class Notifier {
 		}
 
 		if ($notificationLevel === Participant::NOTIFY_ALWAYS) {
+			// Story 4.1: `reaction` is one of the nine gated subjects, so it has to
+			// carry the thread id of the reacted-to message like the others do.
+			// A Thread's *root* message has `topmost_parent_id = 0` and names the
+			// Thread by its own id, hence the `?: getId()` fallback every other
+			// thread-id derivation uses ({@see ReactionManager::addReactionMessage()},
+			// {@see ChatManager::sendMessage()}); without it the most common
+			// reaction target of all would carry no Thread at all.
+			// The resolved id is validated before it is carried, like
+			// {@see ChatManager::sendMessage()} does, because it reaches the deep
+			// link and the composed notification object id.
+			$threadId = (int)$comment->getTopmostParentId() ?: (int)$comment->getId();
+			if (!$this->threadService->validateThread($chat->getId(), $threadId)) {
+				$threadId = 0;
+			}
+
 			$notification = $this->createNotification($chat, $comment, 'reaction', [
 				'reaction' => $reaction->getMessage(),
-			], $reaction);
+			], $reaction, threadId: $threadId);
 			$notification->setUser($comment->getActorId());
 			$this->notificationManager->notify($notification);
 		}
@@ -364,6 +516,12 @@ class Notifier {
 			'reminder',
 		];
 		if (!$chatOnly) {
+			// Story 4.2: the Thread lifecycle notifications live under the `room`
+			// object type, which this branch already clears - the correct
+			// granularity, since {@see ChatManager::deleteMessages()} is the room
+			// teardown path. The chat-only branch above deliberately does not clear
+			// `room`: {@see ChatManager::clearHistory()} must not dismiss a lock
+			// notification.
 			$objectTypes = [
 				'call',
 				'chat',
@@ -633,8 +791,24 @@ class Notifier {
 			'commentId' => $comment->getId(),
 		];
 
-		if ($threadId !== null && $threadId !== 0) {
+		// Only a positive id names a real Thread. `Thread::THREAD_CREATE` (-1) is a
+		// sentinel that {@see ChatManager::sendMessage()} keeps in `$threadId`
+		// through the notification dispatch when a message creates its own Thread,
+		// so a `!== 0` guard would leak `-1` into the message parameters, the deep
+		// link and the notification object id.
+		if ($threadId !== null && $threadId > 0) {
 			$messageData['threadId'] = $threadId;
+
+			// Story 4.1, AC1: the Thread Title is resolved once here, at emit time,
+			// and travels as message parameter data. The per-recipient render path
+			// in \OCA\Talk\Notification\Notifier::parseChatMessage() therefore never
+			// has to look a Thread up. It also freezes the title as it was when the
+			// activity happened, which is the correct reading for a point-in-time
+			// notification.
+			$threadName = $this->getThreadName($chat, $threadId);
+			if ($threadName !== null && $threadName !== '') {
+				$messageData['threadName'] = $threadName;
+			}
 		}
 
 		$notification = $this->notificationManager->createNotification();
@@ -646,6 +820,28 @@ class Notifier {
 			->setDateTime($reaction ? $reaction->getCreationDateTime() : $comment->getCreationDateTime());
 
 		return $notification;
+	}
+
+	/**
+	 * Resolves the title of the given Thread, memoised for the request.
+	 *
+	 * Returns null when the Thread can not be found anymore, in which case the
+	 * notification is still emitted, only without the title.
+	 *
+	 * @param non-negative-int $threadId
+	 */
+	protected function getThreadName(Room $chat, int $threadId): ?string {
+		if (array_key_exists($threadId, $this->threadNames)) {
+			return $this->threadNames[$threadId];
+		}
+
+		try {
+			$this->threadNames[$threadId] = $this->threadService->findByThreadId($chat->getId(), $threadId)->getName();
+		} catch (DoesNotExistException) {
+			$this->threadNames[$threadId] = null;
+		}
+
+		return $this->threadNames[$threadId];
 	}
 
 	protected function getDefaultGroupNotification(): int {

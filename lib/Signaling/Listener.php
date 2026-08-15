@@ -86,6 +86,10 @@ class Listener implements IEventListener {
 		'call_ended_everyone',
 		'thread_created',
 		'thread_renamed',
+		'thread_closed',
+		'thread_locked',
+		'thread_reopened',
+		'thread_unlocked',
 		'message_deleted',
 		'message_edited',
 		'moderator_promoted',
@@ -99,6 +103,51 @@ class Listener implements IEventListener {
 		'poll_closed',
 		'recording_started',
 		'recording_stopped',
+	];
+
+	/**
+	 * Story 1.4, AC19: the four Thread lifecycle transitions this story
+	 * introduces. This is also, verbatim, AD-2's exemption list for the
+	 * Locked-write guard Stories 1.6/1.7 build - declaring it once here
+	 * means that guard reads this list rather than re-deriving its own,
+	 * so the two cannot drift apart.
+	 */
+	public const THREAD_LIFECYCLE_MESSAGE_TYPES = [
+		'thread_closed',
+		'thread_locked',
+		'thread_reopened',
+		'thread_unlocked',
+	];
+
+	/**
+	 * Thread messages that carry a Thread and must relay with the
+	 * threadInfo payload attached (AD-14 registry sites 3 and 4). Must
+	 * stay a superset of THREAD_LIFECYCLE_MESSAGE_TYPES above plus the two
+	 * pre-existing thread messages.
+	 */
+	public const THREAD_MESSAGE_TYPES_WITH_CONTEXT = [
+		'thread_created',
+		'thread_renamed',
+		'thread_closed',
+		'thread_locked',
+		'thread_reopened',
+		'thread_unlocked',
+	];
+
+	/**
+	 * AD-14: verb-check site 2 - messages posted with skip-last-activity-
+	 * update set (system messages that don't move the Conversation to the
+	 * top of the list) that must nonetheless still relay live.
+	 */
+	public const SKIP_LAST_ACTIVITY_EXEMPT_MESSAGE_TYPES = [
+		'message_deleted',
+		'message_edited',
+		'thread_created',
+		'thread_renamed',
+		'thread_closed',
+		'thread_locked',
+		'thread_reopened',
+		'thread_unlocked',
 	];
 
 	protected bool $pauseRoomModifiedListener = false;
@@ -555,7 +604,7 @@ class Listener implements IEventListener {
 		$messageType = $messageDecoded['message'] ?? '';
 
 		if ($event->shouldSkipLastActivityUpdate() === true
-			&& !in_array($messageType, ['message_deleted', 'message_edited', 'thread_created', 'thread_renamed'], true)
+			&& !in_array($messageType, self::SKIP_LAST_ACTIVITY_EXEMPT_MESSAGE_TYPES, true)
 		) {
 			return;
 		}
@@ -574,7 +623,7 @@ class Listener implements IEventListener {
 		}
 
 		$thread = null;
-		if ($messageType === 'thread_created' || $messageType === 'thread_renamed') {
+		if (in_array($messageType, self::THREAD_MESSAGE_TYPES_WITH_CONTEXT, true)) {
 			$threadId = (int)$comment->getTopmostParentId() ?: $comment->getId();
 			try {
 				$thread = $this->threadService->findByThreadId($room->getId(), (int)$threadId);
@@ -618,7 +667,7 @@ class Listener implements IEventListener {
 			}
 		}
 
-		if ($messageType === 'thread_created' || $messageType === 'thread_renamed') {
+		if (in_array($messageType, self::THREAD_MESSAGE_TYPES_WITH_CONTEXT, true)) {
 			$data['chat']['comment']['threadInfo']['thread'] = [
 				'id' => $thread->getId(),
 				'roomToken' => $room->getToken(),
@@ -626,6 +675,13 @@ class Listener implements IEventListener {
 				'lastMessageId' => $thread->getLastMessageId(),
 				'lastActivity' => $thread->getLastActivity()?->getTimestamp() ?? 0,
 				'numReplies' => $thread->getNumReplies(),
+				// Story 1.4, AC16: without `state` here, a live-relayed
+				// state change cannot prove a viewer sees the new value -
+				// this was missing entirely before this story (Story 1.2
+				// added `state` to Thread::toArray() but never touched
+				// this hand-built duplicate).
+				'state' => $thread->getState(),
+				'lockReason' => $thread->getLockReason(),
 			];
 			$data['chat']['comment']['threadInfo']['attendee'] = ['notificationLevel' => 0];
 			$data['chat']['comment']['threadInfo']['first'] = $thread->toArray($room);

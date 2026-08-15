@@ -11,6 +11,7 @@ namespace OCA\Talk;
 use OCA\Guests\UserBackend;
 use OCA\Talk\Chat\ChatManager;
 use OCA\Talk\Model\Attendee;
+use OCA\Talk\Model\Thread;
 use OCA\Talk\Service\LiveTranscriptionService;
 use OCP\App\IAppManager;
 use OCP\AppFramework\Services\IAppConfig;
@@ -135,6 +136,7 @@ class Capabilities implements IPublicCapability {
 		'private-reply',
 		'conversation-tags',
 		'bot-features-api',
+		'thread-management',
 	];
 
 	public const CONDITIONAL_FEATURES = [
@@ -171,6 +173,7 @@ class Capabilities implements IPublicCapability {
 		'conversation-tags',
 		'recording-chunked-upload',
 		'bot-features-api',
+		'thread-management',
 	];
 
 	public const LOCAL_CONFIGS = [
@@ -206,6 +209,9 @@ class Capabilities implements IPublicCapability {
 			'sort-order',
 			'group-mode',
 			'description-length',
+		],
+		'threads' => [
+			'lock-reason-length',
 		],
 		'federation' => [
 			'enabled',
@@ -314,6 +320,11 @@ class Capabilities implements IPublicCapability {
 					'retention-event' => max(0, $this->appConfig->getAppValueInt('retention_event_rooms', 28)),
 					'retention-phone' => max(0, $this->appConfig->getAppValueInt('retention_phone_rooms', 7)),
 					'retention-instant-meetings' => max(0, $this->appConfig->getAppValueInt('retention_instant_meetings', 1)),
+				],
+				'threads' => [
+					// Story 1.4, AC11: the bound is one server-side constant,
+					// published here rather than restated in the interface.
+					'lock-reason-length' => Thread::LOCK_REASON_MAX_LENGTH,
 				],
 				'federation' => [
 					'enabled' => false,

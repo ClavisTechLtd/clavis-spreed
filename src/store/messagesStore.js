@@ -40,6 +40,22 @@ import { convertToUnix } from '../utils/formattedTime.ts'
 import { isHiddenSystemMessage } from '../utils/message.ts'
 
 /**
+ * The four Thread lifecycle transitions (Story 1.4). Kept as its own list
+ * here - distinct from Listener.php's server-side registry and from
+ * message.ts's client-side relay/untranslated/hidden lists, which already
+ * cover *whether* these reach the store at all - because this one instead
+ * answers a different question: once a lifecycle message *has* reached
+ * `processMessage()`, does the "Update threads" block below need to
+ * re-fetch the Thread (Story 1.8, AC8/AC9)?
+ */
+const THREAD_LIFECYCLE_SYSTEM_TYPES = [
+	MESSAGE.SYSTEM_TYPE.THREAD_CLOSED,
+	MESSAGE.SYSTEM_TYPE.THREAD_LOCKED,
+	MESSAGE.SYSTEM_TYPE.THREAD_REOPENED,
+	MESSAGE.SYSTEM_TYPE.THREAD_UNLOCKED,
+]
+
+/**
  * Returns whether the given message contains a mention to self, directly
  * or indirectly through a global mention.
  *
@@ -672,6 +688,20 @@ const actions = {
 			const thread = chatExtrasStore.getThread(token, message.threadId)
 
 			if (!thread) {
+				chatExtrasStore.fetchSingleThread(token, message.threadId)
+			} else if (THREAD_LIFECYCLE_SYSTEM_TYPES.includes(message.systemMessage)) {
+				// Story 1.8, AC8/AC9: a lifecycle transition (close/lock/
+				// reopen/unlock) changes state/lockReason, but neither
+				// field is mirrored onto ChatMessage the way threadTitle/
+				// threadReplies are below - so an already-known Thread is
+				// re-fetched here rather than falling through to the diff
+				// check, which would silently keep every other surface
+				// reading this Thread from useChatExtrasStore (AD-15)
+				// showing the old state until the participant reloads.
+				// One request per live transition per open Conversation,
+				// not per rendered row - AD-9 governs list-page rendering
+				// cost, not this. Also benefits the poll fallback path,
+				// since processMessage() is the one entry point for both.
 				chatExtrasStore.fetchSingleThread(token, message.threadId)
 			} else if (thread.thread.title !== message.threadTitle
 				|| thread.thread.numReplies !== message.threadReplies

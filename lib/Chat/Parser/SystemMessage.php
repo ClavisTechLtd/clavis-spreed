@@ -604,6 +604,65 @@ class SystemMessage implements IEventListener {
 				'id' => 'thread/' . $parameters['thread'],
 				'name' => $parameters['title'],
 			];
+		} elseif ($message === 'thread_closed') {
+			// Story 1.4, AC5
+			$parsedMessage = $this->l->t('{actor} closed thread {title}');
+			if ($currentUserIsActor) {
+				$parsedMessage = $this->l->t('You closed thread {title}');
+			}
+			$parsedParameters['title'] = [
+				'type' => 'highlight',
+				'id' => 'thread/' . $parameters['thread'],
+				'name' => $parameters['title'] ?? (string)$parameters['thread'],
+			];
+		} elseif ($message === 'thread_locked') {
+			// Story 1.4, AC5, AC10: the optional lock reason travels as
+			// message parameter data - a further named placeholder
+			// resolved the same way {title} already is - never
+			// concatenated into the translatable string itself.
+			if (!empty($parameters['reason'])) {
+				$parsedMessage = $this->l->t('{actor} locked thread {title} ({reason})');
+				if ($currentUserIsActor) {
+					$parsedMessage = $this->l->t('You locked thread {title} ({reason})');
+				}
+				$parsedParameters['reason'] = [
+					'type' => 'highlight',
+					'id' => 'thread-lock-reason',
+					'name' => $parameters['reason'],
+				];
+			} else {
+				$parsedMessage = $this->l->t('{actor} locked thread {title}');
+				if ($currentUserIsActor) {
+					$parsedMessage = $this->l->t('You locked thread {title}');
+				}
+			}
+			$parsedParameters['title'] = [
+				'type' => 'highlight',
+				'id' => 'thread/' . $parameters['thread'],
+				'name' => $parameters['title'] ?? (string)$parameters['thread'],
+			];
+		} elseif ($message === 'thread_reopened') {
+			// Story 1.4, AC5, AC3: Closed -> Ongoing
+			$parsedMessage = $this->l->t('{actor} reopened thread {title}');
+			if ($currentUserIsActor) {
+				$parsedMessage = $this->l->t('You reopened thread {title}');
+			}
+			$parsedParameters['title'] = [
+				'type' => 'highlight',
+				'id' => 'thread/' . $parameters['thread'],
+				'name' => $parameters['title'] ?? (string)$parameters['thread'],
+			];
+		} elseif ($message === 'thread_unlocked') {
+			// Story 1.4, AC5, AC4: Locked -> Ongoing
+			$parsedMessage = $this->l->t('{actor} unlocked thread {title}');
+			if ($currentUserIsActor) {
+				$parsedMessage = $this->l->t('You unlocked thread {title}');
+			}
+			$parsedParameters['title'] = [
+				'type' => 'highlight',
+				'id' => 'thread/' . $parameters['thread'],
+				'name' => $parameters['title'] ?? (string)$parameters['thread'],
+			];
 		} elseif ($message === 'matterbridge_config_edited') {
 			$parsedMessage = $this->l->t('{actor} updated the Matterbridge configuration');
 			if ($currentUserIsActor) {
